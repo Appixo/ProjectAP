@@ -3,7 +3,7 @@
 
 const APP_TIMEZONE = 'Europe/Amsterdam'
 
-function ymdInAmsterdam(date: Date): string {
+export function ymdInAmsterdam(date: Date): string {
   // 'en-CA' formats year-month-day as YYYY-MM-DD.
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: APP_TIMEZONE,
@@ -28,6 +28,10 @@ export function weekStartFromStartAt(startAtIso: string): string {
 
 export function todayMondayInAmsterdam(): string {
   return mondayOfYmd(ymdInAmsterdam(new Date()))
+}
+
+export function todayInAmsterdam(): string {
+  return ymdInAmsterdam(new Date())
 }
 
 export function addWeeks(ymd: string, n: number): string {

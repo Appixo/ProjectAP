@@ -9,6 +9,10 @@ import {
   type PaceDatum,
 } from '@/components/charts/PaceTrend'
 import {
+  SleepEnergy,
+  type SleepEnergyDatum,
+} from '@/components/charts/SleepEnergy'
+import {
   addWeeks,
   todayMondayInAmsterdam,
   weekStartFromStartAt,
@@ -52,6 +56,14 @@ export default async function DashboardPage() {
     .order('start_at', { ascending: false })
     .limit(RECENT_LIMIT)
 
+  const { data: logs } = await supabase
+    .from('daily_log')
+    .select('log_date, sleep_hours, energy, sleep_score')
+    .not('sleep_hours', 'is', null)
+    .not('energy', 'is', null)
+    .order('log_date', { ascending: false })
+    .limit(180)
+
   // Weekly mileage — bucket by Mon-Sun in Europe/Amsterdam, fill empty weeks.
   const weeklyMap = new Map<string, number>()
   for (const a of chartActivities ?? []) {
@@ -63,6 +75,22 @@ export default async function DashboardPage() {
     const week = addWeeks(sinceMonday, i)
     weeks.push({ week, km: Number((weeklyMap.get(week) ?? 0).toFixed(2)) })
   }
+
+  const sleepEnergyData: SleepEnergyDatum[] = (logs ?? [])
+    .filter(
+      (l): l is {
+        log_date: string
+        sleep_hours: number
+        energy: number
+        sleep_score: number | null
+      } => l.sleep_hours !== null && l.energy !== null,
+    )
+    .map(l => ({
+      log_date: l.log_date,
+      sleep_hours: l.sleep_hours,
+      energy: l.energy,
+      sleep_score: l.sleep_score,
+    }))
 
   // Pace trend — last 90 days, one point per run.
   const paceCutoff = paceSince.getTime()
@@ -95,6 +123,13 @@ export default async function DashboardPage() {
           Pace trend <span className="text-sm text-neutral-500 font-normal">(last {PACE_WINDOW_DAYS} days, min/km)</span>
         </h2>
         <PaceTrend data={paceData} />
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold">
+          Sleep vs energy <span className="text-sm text-neutral-500 font-normal">(dot size = sleep score)</span>
+        </h2>
+        <SleepEnergy data={sleepEnergyData} />
       </section>
 
       <section className="space-y-3">
