@@ -1,4 +1,7 @@
-import 'server-only'
+// Server-side only; called from route handlers and local scripts.
+// Not guarded with `server-only` because the local backfill script
+// imports it directly under tsx. Strava secrets here are not prefixed
+// with NEXT_PUBLIC_, so Next still won't inline them into the client bundle.
 
 const STRAVA_TOKEN_URL = 'https://www.strava.com/oauth/token'
 
