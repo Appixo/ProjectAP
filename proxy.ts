@@ -12,7 +12,7 @@ function isPublic(path: string): boolean {
   return PUBLIC_PATHS.some(p => path === p || path.startsWith(p + '/'))
 }
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request })
 
   const supabase = createServerClient(
