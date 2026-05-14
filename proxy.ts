@@ -13,6 +13,17 @@ function isPublic(path: string): boolean {
   return PUBLIC_PATHS.some(p => path === p || path.startsWith(p + '/'))
 }
 
+function redirectWithCookies(
+  url: URL,
+  source: NextResponse,
+): NextResponse {
+  const redirect = NextResponse.redirect(url)
+  for (const cookie of source.cookies.getAll()) {
+    redirect.cookies.set(cookie)
+  }
+  return redirect
+}
+
 export async function proxy(request: NextRequest) {
   let response = NextResponse.next({ request })
 
@@ -46,14 +57,14 @@ export async function proxy(request: NextRequest) {
     url.pathname = '/login'
     url.search = ''
     url.searchParams.set('denied', '1')
-    return NextResponse.redirect(url)
+    return redirectWithCookies(url, response)
   }
 
   if (!user && !isPublic(path)) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     if (path !== '/') url.searchParams.set('next', path)
-    return NextResponse.redirect(url)
+    return redirectWithCookies(url, response)
   }
 
   return response
