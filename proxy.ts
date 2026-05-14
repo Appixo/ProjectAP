@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { isAllowedEmail } from '@/lib/auth/allowlist'
 
 const PUBLIC_PATHS = [
   '/login',
@@ -37,8 +38,17 @@ export async function proxy(request: NextRequest) {
   )
 
   const { data: { user } } = await supabase.auth.getUser()
-
   const path = request.nextUrl.pathname
+
+  if (user && !isAllowedEmail(user.email)) {
+    await supabase.auth.signOut()
+    const url = request.nextUrl.clone()
+    url.pathname = '/login'
+    url.search = ''
+    url.searchParams.set('denied', '1')
+    return NextResponse.redirect(url)
+  }
+
   if (!user && !isPublic(path)) {
     const url = request.nextUrl.clone()
     url.pathname = '/login'
