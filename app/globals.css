@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-@theme inline {
+@theme {
   /* surface + ink */
   --color-bg:        oklch(0.985 0.003 85);
   --color-panel:     oklch(1     0     0);
