@@ -14,21 +14,24 @@ export default async function DashboardLayout({
   if (!user) redirect('/login')
 
   return (
-    <div className="min-h-screen flex flex-col">
-      <header className="border-b border-neutral-200 px-6 py-3 flex items-center justify-between">
-        <nav className="flex items-center gap-4 text-sm">
-          <Link href="/" className="font-semibold">Consistent</Link>
-          <Link href="/log" className="text-neutral-600 hover:text-neutral-900">Log</Link>
-          <Link href="/settings" className="text-neutral-600 hover:text-neutral-900">Settings</Link>
+    <div className="min-h-screen flex flex-col bg-bg">
+      <header className="border-b border-border bg-panel px-6 py-2.5 flex items-center justify-between">
+        <nav className="flex items-center gap-4 text-[13px]">
+          <Link href="/" className="font-semibold text-ink">Consistent</Link>
+          <Link href="/log" className="text-ink-2 hover:text-ink">Log</Link>
+          <Link href="/settings" className="text-ink-2 hover:text-ink">Settings</Link>
         </nav>
         <form action="/api/auth/signout" method="post" className="flex items-center gap-3">
-          <span className="text-sm text-neutral-600">{user.email}</span>
-          <button type="submit" className="text-sm text-neutral-600 hover:text-neutral-900 underline-offset-2 hover:underline">
+          <span className="text-[12px] text-muted">{user.email}</span>
+          <button
+            type="submit"
+            className="text-[12px] text-muted hover:text-ink underline-offset-2 hover:underline"
+          >
             Sign out
           </button>
         </form>
       </header>
-      <main className="flex-1 p-6">{children}</main>
+      <main className="flex-1">{children}</main>
     </div>
   )
 }

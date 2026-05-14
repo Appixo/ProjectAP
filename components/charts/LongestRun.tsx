@@ -2,25 +2,45 @@
 
 import {
   CartesianGrid,
+  Dot,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts'
-import { formatPace } from '@/lib/run/classify'
 
-export interface PaceDatum {
-  date: string // YYYY-MM-DD
-  pace: number // min/km, decimal
-  rolling: number | null // 7-run rolling avg
-  km: number
+export interface LongestDatum {
+  weekStart: string // YYYY-MM-DD
+  longestKm: number
 }
 
-export function PaceTrend({ data }: { data: PaceDatum[] }) {
+interface AccentDotProps {
+  cx?: number
+  cy?: number
+  index?: number
+  totalPoints: number
+}
+
+function LastPointDot({ cx, cy, index, totalPoints }: AccentDotProps) {
+  if (cx === undefined || cy === undefined) return null
+  const isLast = index === totalPoints - 1
+  return (
+    <Dot
+      cx={cx}
+      cy={cy}
+      r={isLast ? 3.5 : 2.5}
+      fill={isLast ? 'var(--color-accent)' : 'var(--color-ink)'}
+      stroke={isLast ? 'var(--color-accent)' : 'var(--color-ink)'}
+    />
+  )
+}
+
+export function LongestRun({ data }: { data: LongestDatum[] }) {
   if (data.length === 0) {
-    return <p className="text-sm text-muted">No runs in this window.</p>
+    return <p className="text-sm text-muted">Not enough data yet.</p>
   }
   return (
     <div className="w-full h-40">
@@ -32,7 +52,7 @@ export function PaceTrend({ data }: { data: PaceDatum[] }) {
             strokeWidth={1}
           />
           <XAxis
-            dataKey="date"
+            dataKey="weekStart"
             tickFormatter={s => s.slice(5)}
             interval="preserveStartEnd"
             tick={{
@@ -44,9 +64,7 @@ export function PaceTrend({ data }: { data: PaceDatum[] }) {
             axisLine={{ stroke: 'var(--color-muted)' }}
           />
           <YAxis
-            reversed
-            domain={['dataMin - 0.2', 'dataMax + 0.2']}
-            tickFormatter={(v: number) => formatPace(v)}
+            domain={[0, 'dataMax + 4']}
             tick={{
               fontFamily: 'var(--font-mono)',
               fontSize: 10,
@@ -54,19 +72,26 @@ export function PaceTrend({ data }: { data: PaceDatum[] }) {
             }}
             tickLine={false}
             axisLine={false}
-            width={36}
+            width={28}
+          />
+          <ReferenceLine
+            y={30}
+            stroke="var(--color-muted)"
+            strokeDasharray="3 3"
+            label={{
+              value: 'marathon target ≥ 30',
+              position: 'insideTopRight',
+              fontSize: 9,
+              fontFamily: 'var(--font-mono)',
+              fill: 'var(--color-muted)',
+            }}
           />
           <Tooltip
-            formatter={(value, name, item) => {
+            formatter={value => {
               const n = typeof value === 'number' ? value : Number(value)
-              const km = (item?.payload as PaceDatum | undefined)?.km
-              const label = name === 'rolling' ? '7-run avg' : 'Pace'
-              return [
-                `${formatPace(n)} /km${km ? ` · ${km.toFixed(2)} km` : ''}`,
-                label,
-              ]
+              return [`${n.toFixed(1)} km`, 'Longest']
             }}
-            labelFormatter={label => String(label ?? '')}
+            labelFormatter={label => `Week of ${String(label)}`}
             contentStyle={{
               fontSize: 12,
               borderRadius: 3,
@@ -76,21 +101,14 @@ export function PaceTrend({ data }: { data: PaceDatum[] }) {
           />
           <Line
             type="monotone"
-            dataKey="pace"
+            dataKey="longestKm"
             stroke="var(--color-ink)"
-            strokeWidth={1.2}
-            dot={false}
+            strokeWidth={1.5}
             isAnimationActive={false}
-            connectNulls
-          />
-          <Line
-            type="monotone"
-            dataKey="rolling"
-            stroke="var(--color-accent)"
-            strokeWidth={1.8}
-            dot={false}
-            isAnimationActive={false}
-            connectNulls
+            dot={dotProps => (
+              <LastPointDot {...dotProps} totalPoints={data.length} />
+            )}
+            activeDot={{ r: 4, fill: 'var(--color-accent)' }}
           />
         </LineChart>
       </ResponsiveContainer>

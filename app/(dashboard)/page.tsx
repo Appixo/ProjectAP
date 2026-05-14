@@ -1,141 +1,393 @@
 import { createSupabaseServerClient } from '@/lib/supabase/server'
-import { ActivityTable, type ActivityRow } from '@/components/ActivityTable'
-import {
-  WeeklyMileage,
-  type WeekDatum,
-} from '@/components/charts/WeeklyMileage'
-import {
-  PaceTrend,
-  type PaceDatum,
-} from '@/components/charts/PaceTrend'
-import {
-  SleepEnergy,
-  type SleepEnergyDatum,
-} from '@/components/charts/SleepEnergy'
+import { DashboardHeader } from '@/components/dashboard/Header'
+import { DailyLogCard } from '@/components/dashboard/DailyLogCard'
+import { SessionLogPicker } from '@/components/dashboard/SessionLogPicker'
+import { WeekReview, type WeekReviewActivity, type WeekReviewLog } from '@/components/dashboard/WeekReview'
+import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
+import { Footnote } from '@/components/dashboard/Footnote'
+import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
+import { LongestRun, type LongestDatum } from '@/components/charts/LongestRun'
+import { PaceTrend, type PaceDatum } from '@/components/charts/PaceTrend'
+import { Sleep, type SleepDatum } from '@/components/charts/Sleep'
+import { classifyRuns, formatPace } from '@/lib/run/classify'
+import { pctChange, sumKm, weeklyBuckets } from '@/lib/run/aggregate'
+import { planContext } from '@/lib/time/race'
 import {
   addWeeks,
+  mondayOfYmd,
   todayMondayInAmsterdam,
-  weekStartFromStartAt,
+  ymdInAmsterdam,
 } from '@/lib/time/week'
 
-const WEEKS_SHOWN = 16
-const PACE_WINDOW_DAYS = 90
-const RECENT_LIMIT = 20
+const WEEKS_FOR_MILEAGE = 16
+const WEEKS_FOR_LONGEST = 12
+const DAYS_FOR_PACE = 90
+const DAYS_FOR_SLEEP = 30
 
-function ymdInAmsterdam(date: Date): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Europe/Amsterdam',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(date)
+interface RawActivity {
+  id: number
+  start_at: string
+  distance_m: number
+  moving_time_s: number
+  average_heartrate: number | null
+  average_speed_mps: number | null
+}
+
+interface RawDailyLog {
+  log_date: string
+  sleep_hours: number | null
+  sleep_score: number | null
+  energy: number | null
+  habit_strength_done: boolean
+  habit_no_alcohol: boolean
+  habit_in_bed_on_time: boolean
+}
+
+function formatMonthDay(ymd: string): string {
+  return new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function formatWeekLabel(mondayYmd: string, planWeek?: number): string {
+  const sundayYmd = addWeeks(mondayYmd, 1)
+  // sunday is the Monday of the next week; subtract one day for actual Sunday
+  const sun = new Date(sundayYmd + 'T00:00:00Z')
+  sun.setUTCDate(sun.getUTCDate() - 1)
+  const sundayLabel = sun.toLocaleDateString('en-GB', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+  })
+  const range = `${formatMonthDay(mondayYmd)} – ${sundayLabel}`
+  return planWeek ? `${range} · week ${planWeek}` : range
 }
 
 export default async function DashboardPage() {
   const supabase = await createSupabaseServerClient()
+  const now = new Date()
+  const todayYmd = ymdInAmsterdam(now)
+  const todayMonday = todayMondayInAmsterdam()
+  const lastWeekMonday = addWeeks(todayMonday, -1)
+  const sixteenWeeksAgoMonday = addWeeks(todayMonday, -(WEEKS_FOR_MILEAGE - 1))
+  const sinceIso = new Date(sixteenWeeksAgoMonday + 'T00:00:00Z').toISOString()
 
-  const sinceMonday = addWeeks(todayMondayInAmsterdam(), -(WEEKS_SHOWN - 1))
-  const sinceWeekIso = new Date(sinceMonday + 'T00:00:00Z').toISOString()
+  const sleepCutoffYmd = ymdInAmsterdam(
+    new Date(now.getTime() - DAYS_FOR_SLEEP * 86400 * 1000),
+  )
 
-  const paceSince = new Date()
-  paceSince.setUTCDate(paceSince.getUTCDate() - PACE_WINDOW_DAYS)
+  const [{ data: rawActivities }, { data: sleepLogs }, { data: lastWeekLogs }] =
+    await Promise.all([
+      supabase
+        .from('activities')
+        .select(
+          'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
+        )
+        .eq('type', 'Run')
+        .gte('start_at', sinceIso)
+        .order('start_at', { ascending: true })
+        .returns<RawActivity[]>(),
+      supabase
+        .from('daily_log')
+        .select('log_date, sleep_hours')
+        .gte('log_date', sleepCutoffYmd)
+        .order('log_date', { ascending: true })
+        .returns<{ log_date: string; sleep_hours: number | null }[]>(),
+      supabase
+        .from('daily_log')
+        .select(
+          'log_date, sleep_hours, sleep_score, energy, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
+        )
+        .gte('log_date', lastWeekMonday)
+        .lt('log_date', todayMonday)
+        .order('log_date', { ascending: true })
+        .returns<RawDailyLog[]>(),
+    ])
 
-  const { data: chartActivities } = await supabase
-    .from('activities')
-    .select('start_at, distance_m, average_speed_mps')
-    .eq('type', 'Run')
-    .gte('start_at', sinceWeekIso)
-    .order('start_at', { ascending: true })
+  const activities = rawActivities ?? []
+  const types = classifyRuns(
+    activities.map(a => ({
+      id: a.id,
+      start_at: a.start_at,
+      distance_m: a.distance_m,
+      average_speed_mps: a.average_speed_mps,
+    })),
+  )
 
-  const { data: recent } = await supabase
-    .from('activities')
-    .select(
-      'id, name, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
-    )
-    .eq('type', 'Run')
-    .order('start_at', { ascending: false })
-    .limit(RECENT_LIMIT)
+  const enriched = activities.map(a => ({
+    ...a,
+    runType: types.get(a.id) ?? 'easy',
+  }))
 
-  const { data: logs } = await supabase
-    .from('daily_log')
-    .select('log_date, sleep_hours, energy, sleep_score')
-    .not('sleep_hours', 'is', null)
-    .not('energy', 'is', null)
-    .order('log_date', { ascending: false })
-    .limit(180)
+  const thisWeekRuns = enriched.filter(
+    a => mondayOfYmd(ymdInAmsterdam(new Date(a.start_at))) === todayMonday,
+  )
+  const lastWeekRuns = enriched.filter(
+    a => mondayOfYmd(ymdInAmsterdam(new Date(a.start_at))) === lastWeekMonday,
+  )
 
-  // Weekly mileage — bucket by Mon-Sun in Europe/Amsterdam, fill empty weeks.
-  const weeklyMap = new Map<string, number>()
-  for (const a of chartActivities ?? []) {
-    const week = weekStartFromStartAt(a.start_at)
-    weeklyMap.set(week, (weeklyMap.get(week) ?? 0) + a.distance_m / 1000)
-  }
-  const weeks: WeekDatum[] = []
-  for (let i = 0; i < WEEKS_SHOWN; i++) {
-    const week = addWeeks(sinceMonday, i)
-    weeks.push({ week, km: Number((weeklyMap.get(week) ?? 0).toFixed(2)) })
-  }
+  // Weekly mileage — 16 weeks
+  const weeklyChartBuckets = weeklyBuckets(activities, WEEKS_FOR_MILEAGE, todayMonday)
+  const weekData: WeekDatum[] = weeklyChartBuckets.map(b => ({
+    weekStart: b.weekStart,
+    km: b.km,
+    zone: b.zone,
+  }))
 
-  const sleepEnergyData: SleepEnergyDatum[] = (logs ?? [])
-    .filter(
-      (l): l is {
-        log_date: string
-        sleep_hours: number
-        energy: number
-        sleep_score: number | null
-      } => l.sleep_hours !== null && l.energy !== null,
-    )
-    .map(l => ({
-      log_date: l.log_date,
-      sleep_hours: l.sleep_hours,
-      energy: l.energy,
-      sleep_score: l.sleep_score,
+  // Longest run per week — last 12 weeks (drop incomplete current week from line)
+  const longestData: LongestDatum[] = weeklyChartBuckets
+    .slice(-WEEKS_FOR_LONGEST)
+    .filter(b => b.longestM > 0 || b.weekStart !== todayMonday)
+    .map(b => ({
+      weekStart: b.weekStart,
+      longestKm: Number((b.longestM / 1000).toFixed(2)),
     }))
 
-  // Pace trend — last 90 days, one point per run.
-  const paceCutoff = paceSince.getTime()
-  const paceData: PaceDatum[] = (chartActivities ?? [])
-    .filter(a => {
-      const t = new Date(a.start_at).getTime()
-      return (
-        t >= paceCutoff &&
+  // Pace trend — last 90d + 7-run rolling
+  const paceCutoffMs = now.getTime() - DAYS_FOR_PACE * 86400 * 1000
+  const paceRuns = activities
+    .filter(
+      a =>
+        new Date(a.start_at).getTime() >= paceCutoffMs &&
         a.average_speed_mps !== null &&
-        a.average_speed_mps > 0
-      )
-    })
-    .map(a => ({
+        a.average_speed_mps > 0,
+    )
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime(),
+    )
+
+  const paceData: PaceDatum[] = paceRuns.map((a, i) => {
+    const win = paceRuns.slice(Math.max(0, i - 6), i + 1)
+    const sumMps = win.reduce(
+      (s, w) => s + (w.average_speed_mps as number),
+      0,
+    )
+    const avgMps = sumMps / win.length
+    return {
       date: ymdInAmsterdam(new Date(a.start_at)),
       pace: 1000 / (a.average_speed_mps as number) / 60,
+      rolling: win.length >= 7 ? 1000 / avgMps / 60 : null,
       km: a.distance_m / 1000,
+    }
+  })
+
+  const rollingNow =
+    paceData.length > 0
+      ? paceData[paceData.length - 1].rolling ??
+        paceData[paceData.length - 1].pace
+      : null
+  const paceFirst = paceData.length > 0 ? paceData[0].pace : null
+  const paceDeltaSec =
+    paceFirst !== null && rollingNow !== null
+      ? Math.round((rollingNow - paceFirst) * 60)
+      : null
+
+  // Sleep — last 30 days with non-null hours
+  const sleepData: SleepDatum[] = (sleepLogs ?? [])
+    .filter(
+      (l): l is { log_date: string; sleep_hours: number } =>
+        l.sleep_hours !== null,
+    )
+    .map(l => ({ log_date: l.log_date, sleep_hours: l.sleep_hours }))
+
+  const sleepAvg30 =
+    sleepData.length > 0
+      ? sleepData.reduce((s, d) => s + d.sleep_hours, 0) / sleepData.length
+      : null
+  const sleepAvg7 = (() => {
+    const last7 = sleepData.slice(-7)
+    if (last7.length === 0) return null
+    return last7.reduce((s, d) => s + d.sleep_hours, 0) / last7.length
+  })()
+
+  // Footers for charts
+  const lastWeekKm = sumKm(lastWeekRuns)
+  const thisWeekKm = sumKm(thisWeekRuns)
+  const wow = pctChange(lastWeekKm, sumKm(weeklyChartBuckets.slice(-3, -2).flatMap(() => [])))
+  void wow // placeholder — we already render WoW inside WeekReview
+
+  const plan = planContext(now)
+  const weekLabelReview = formatWeekLabel(lastWeekMonday, Math.max(1, plan.weekNumber - 1))
+  const weekLabelThisWeek = formatWeekLabel(todayMonday, plan.weekNumber)
+
+  const runRows: RunRow[] = thisWeekRuns
+    .slice()
+    .sort(
+      (a, b) =>
+        new Date(a.start_at).getTime() - new Date(b.start_at).getTime(),
+    )
+    .map(r => ({
+      id: r.id,
+      start_at: r.start_at,
+      distance_m: r.distance_m,
+      moving_time_s: r.moving_time_s,
+      average_heartrate: r.average_heartrate,
+      average_speed_mps: r.average_speed_mps,
+      runType: r.runType,
     }))
 
+  const reviewActivities: WeekReviewActivity[] = lastWeekRuns.map(r => ({
+    id: r.id,
+    start_at: r.start_at,
+    distance_m: r.distance_m,
+    moving_time_s: r.moving_time_s,
+    average_heartrate: r.average_heartrate,
+    average_speed_mps: r.average_speed_mps,
+    runType: r.runType,
+  }))
+  const reviewThisWeek: WeekReviewActivity[] = thisWeekRuns.map(r => ({
+    id: r.id,
+    start_at: r.start_at,
+    distance_m: r.distance_m,
+    moving_time_s: r.moving_time_s,
+    average_heartrate: r.average_heartrate,
+    average_speed_mps: r.average_speed_mps,
+    runType: r.runType,
+  }))
+  const reviewLogs: WeekReviewLog[] = (lastWeekLogs ?? []).map(l => ({
+    log_date: l.log_date,
+    sleep_hours: l.sleep_hours,
+    sleep_score: l.sleep_score,
+    energy: l.energy,
+    habit_strength_done: l.habit_strength_done,
+    habit_no_alcohol: l.habit_no_alcohol,
+    habit_in_bed_on_time: l.habit_in_bed_on_time,
+  }))
+
   return (
-    <div className="space-y-8 max-w-5xl">
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">
-          Weekly mileage <span className="text-sm text-neutral-500 font-normal">(last {WEEKS_SHOWN} weeks)</span>
-        </h2>
-        <WeeklyMileage data={weeks} />
+    <div className="max-w-[1200px] mx-auto px-7 pt-8 pb-20">
+      <DashboardHeader />
+
+      {/* inputs row */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <DailyLogCard />
+        <SessionLogPicker todayYmd={todayYmd} />
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">
-          Pace trend <span className="text-sm text-neutral-500 font-normal">(last {PACE_WINDOW_DAYS} days, min/km)</span>
-        </h2>
-        <PaceTrend data={paceData} />
+      {/* week review */}
+      <WeekReview
+        weekLabel={weekLabelReview}
+        thisWeek={reviewThisWeek}
+        lastWeek={reviewActivities}
+        logs={reviewLogs}
+      />
+
+      {/* trend strip — 2x2 */}
+      <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+        <ChartCard
+          title="Weekly mileage"
+          meta={`${WEEKS_FOR_MILEAGE} weeks · km · Mon–Sun`}
+          foot={
+            <div className="flex justify-between font-mono text-[10px] text-muted mt-1">
+              <span>last wk {lastWeekKm.toFixed(1)} km</span>
+              <span>this wk {thisWeekKm.toFixed(1)} km (so far)</span>
+            </div>
+          }
+        >
+          <WeeklyMileage data={weekData} />
+          <WeeklyMileageLegend />
+        </ChartCard>
+
+        <ChartCard
+          title="Longest run / week"
+          meta={`${WEEKS_FOR_LONGEST} weeks · km`}
+          foot={
+            <div className="flex justify-between font-mono text-[10px] text-muted mt-1">
+              <span>
+                {longestData.length > 0
+                  ? `last ${longestData[longestData.length - 1].longestKm.toFixed(1)} km`
+                  : '—'}
+              </span>
+              <span>
+                {longestData.length > 0
+                  ? `${(30 - longestData[longestData.length - 1].longestKm).toFixed(1)} km gap to target`
+                  : 'marathon target ≥ 30'}
+              </span>
+            </div>
+          }
+        >
+          <LongestRun data={longestData} />
+        </ChartCard>
+
+        <ChartCard
+          title="Pace trend"
+          meta={`${DAYS_FOR_PACE} days · min/km · ↑ = faster`}
+          foot={
+            <div className="flex justify-between font-mono text-[10px] text-muted mt-1">
+              <span>
+                {rollingNow !== null
+                  ? `7-run avg ${formatPace(rollingNow)} /km`
+                  : '—'}
+              </span>
+              <span>
+                {paceDeltaSec !== null
+                  ? `${paceDeltaSec >= 0 ? '+' : ''}${paceDeltaSec}s vs ${DAYS_FOR_PACE}d ago`
+                  : ''}
+              </span>
+            </div>
+          }
+        >
+          <PaceTrend data={paceData} />
+        </ChartCard>
+
+        <ChartCard
+          title="Sleep"
+          meta={`${DAYS_FOR_SLEEP} days · hours`}
+          foot={
+            <div className="flex justify-between font-mono text-[10px] text-muted mt-1">
+              <span>
+                {sleepAvg30 !== null
+                  ? `${DAYS_FOR_SLEEP}d avg ${sleepAvg30.toFixed(1)} h`
+                  : '—'}
+              </span>
+              <span>
+                {sleepAvg7 !== null
+                  ? `last 7 days ${sleepAvg7.toFixed(1)} h`
+                  : ''}
+              </span>
+            </div>
+          }
+        >
+          <Sleep data={sleepData} />
+        </ChartCard>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">
-          Sleep vs energy <span className="text-sm text-neutral-500 font-normal">(dot size = sleep score)</span>
-        </h2>
-        <SleepEnergy data={sleepEnergyData} />
-      </section>
+      {/* this week's runs */}
+      <RunsTable weekLabel={weekLabelThisWeek} rows={runRows} />
 
-      <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Recent runs</h2>
-        <ActivityTable rows={(recent ?? []) as ActivityRow[]} />
-      </section>
+      <Footnote />
+    </div>
+  )
+}
+
+function ChartCard({
+  title,
+  meta,
+  children,
+  foot,
+}: {
+  title: string
+  meta: string
+  children: React.ReactNode
+  foot?: React.ReactNode
+}) {
+  return (
+    <div className="card bg-panel border border-border rounded-[4px]">
+      <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border">
+        <h2 className="m-0 text-[11px] uppercase tracking-[0.1em] text-ink-2 font-semibold">
+          {title}
+        </h2>
+        <span className="font-mono text-[11px] text-muted -tracking-[0.01em]">
+          {meta}
+        </span>
+      </div>
+      <div className="px-4 pt-3.5 pb-3">
+        {children}
+        {foot}
+      </div>
     </div>
   )
 }

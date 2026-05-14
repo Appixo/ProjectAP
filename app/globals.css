@@ -1,26 +1,52 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  /* surface + ink */
+  --color-bg:        oklch(0.985 0.003 85);
+  --color-panel:     oklch(1     0     0);
+  --color-ink:       oklch(0.22  0.01  85);
+  --color-ink-2:     oklch(0.38  0.01  85);
+  --color-muted:     oklch(0.55  0.01  85);
+  --color-faint:     oklch(0.72  0.008 85);
+  --color-border:    oklch(0.9   0.005 85);
+  --color-border-2:  oklch(0.83  0.005 85);
+
+  /* signal */
+  --color-accent:        oklch(0.45 0.08 230);
+  --color-accent-soft:   oklch(0.45 0.08 230 / 0.10);
+  --color-success:       oklch(0.55 0.08 145);
+  --color-warn:          oklch(0.62 0.10  60);
+
+  /* semantic palette — meaning, not decoration.
+     amber = intensity / aggressive load
+     green = healthy progression / recovery
+     blue  = primary signal / long efforts
+     ink   = baseline / easy default
+     faint = below baseline / cutback */
+  --color-type-easy:     oklch(0.22 0.01 85);
+  --color-type-tempo:    oklch(0.62 0.13 55);
+  --color-type-long:     oklch(0.45 0.08 230);
+  --color-type-recovery: oklch(0.55 0.09 145);
+  --color-type-race:     oklch(0.55 0.16 25);
+
+  --color-zone-build:    oklch(0.55 0.09 145);
+  --color-zone-neutral:  oklch(0.22 0.01 85);
+  --color-zone-spike:    oklch(0.68 0.13 60);
+  --color-zone-cut:      oklch(0.78 0.008 85);
+
+  --font-sans: Helvetica, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  background: var(--color-bg);
+  color: var(--color-ink);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
