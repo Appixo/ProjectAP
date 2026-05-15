@@ -15,6 +15,7 @@ interface ExportTokenRow {
   created_at: string
   last_used_at: string | null
   revoked: boolean
+  can_write: boolean
 }
 
 interface GoalsRow {
@@ -81,6 +82,7 @@ async function createExportToken(formData: FormData) {
 
   const labelRaw = String(formData.get('label') ?? '').trim()
   const label = labelRaw.slice(0, 60) || 'export'
+  const canWrite = formData.get('can_write') === 'on'
   const raw = randomBytes(32).toString('hex')
   const hash = createHash('sha256').update(raw).digest('hex')
 
@@ -88,6 +90,7 @@ async function createExportToken(formData: FormData) {
     user_id: user.id,
     token_hash: hash,
     label,
+    can_write: canWrite,
   })
   if (error) {
     redirect(
@@ -244,7 +247,7 @@ export default async function SettingsPage({
 
   const { data: tokens } = await supabase
     .from('export_tokens')
-    .select('token_hash, label, created_at, last_used_at, revoked')
+    .select('token_hash, label, created_at, last_used_at, revoked, can_write')
     .eq('user_id', user.id)
     .order('created_at', { ascending: false })
     .returns<ExportTokenRow[]>()
@@ -494,11 +497,14 @@ export default async function SettingsPage({
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold text-ink">Export tokens</h2>
+        <h2 className="text-lg font-semibold text-ink">API tokens</h2>
         <p className="text-sm text-muted">
-          Use a token to fetch all your data as JSON from{' '}
-          <code className="font-mono text-ink-2">/api/export?token=…</code>. Treat each
-          token like a password.
+          Read tokens fetch all your data as JSON from{' '}
+          <code className="font-mono text-ink-2">/api/export?token=…</code>.
+          Tokens with <span className="text-ink-2">write scope</span> can also
+          POST new sessions to{' '}
+          <code className="font-mono text-ink-2">/api/sessions?token=…</code>.
+          Treat each token like a password.
         </p>
 
         {newTokenValue && (
@@ -510,9 +516,15 @@ export default async function SettingsPage({
               {newTokenValue}
             </code>
             <p className="text-xs text-ink-2">
-              Full URL:{' '}
+              Read URL:{' '}
               <code className="font-mono break-all">
                 {exportUrlBase}/api/export?token={newTokenValue}
+              </code>
+            </p>
+            <p className="text-xs text-ink-2">
+              Write URL (if write scope enabled):{' '}
+              <code className="font-mono break-all">
+                {exportUrlBase}/api/sessions?token={newTokenValue}
               </code>
             </p>
           </div>
@@ -524,7 +536,7 @@ export default async function SettingsPage({
           <p className="text-sm text-muted">Token revoked.</p>
         )}
 
-        <form action={createExportToken} className="flex items-end gap-2">
+        <form action={createExportToken} className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <label htmlFor="label" className="text-sm text-muted">
               Label
@@ -538,6 +550,14 @@ export default async function SettingsPage({
               className="rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm w-64"
             />
           </div>
+          <label className="flex items-center gap-2 text-sm text-ink-2 pb-2">
+            <input
+              type="checkbox"
+              name="can_write"
+              className="accent-[var(--color-accent)]"
+            />
+            Allow writing sessions
+          </label>
           <button
             type="submit"
             className="rounded bg-ink text-bg px-3 py-2 text-sm font-medium hover:opacity-90"
@@ -552,6 +572,7 @@ export default async function SettingsPage({
               <thead>
                 <tr className="text-left text-muted border-b border-border">
                   <th className="py-2 pr-4 font-medium">Label</th>
+                  <th className="py-2 pr-4 font-medium">Scope</th>
                   <th className="py-2 pr-4 font-medium">Hash</th>
                   <th className="py-2 pr-4 font-medium">Created</th>
                   <th className="py-2 pr-4 font-medium">Last used</th>
@@ -562,6 +583,15 @@ export default async function SettingsPage({
                 {tokens.map(t => (
                   <tr key={t.token_hash} className="border-b border-border text-ink-2">
                     <td className="py-2 pr-4">{t.label ?? '—'}</td>
+                    <td className="py-2 pr-4">
+                      {t.can_write ? (
+                        <span className="text-xs font-mono text-accent">
+                          read+write
+                        </span>
+                      ) : (
+                        <span className="text-xs font-mono text-muted">read</span>
+                      )}
+                    </td>
                     <td className="py-2 pr-4 font-mono text-xs">
                       {shortHash(t.token_hash)}
                     </td>
@@ -596,6 +626,37 @@ export default async function SettingsPage({
             </table>
           </div>
         )}
+
+        <details className="text-sm text-ink-2 pt-2">
+          <summary className="cursor-pointer text-muted hover:text-ink">
+            How to let Claude log sessions for you
+          </summary>
+          <div className="space-y-2 pt-3">
+            <p>
+              Create a token with <span className="text-ink">Allow writing sessions</span> checked,
+              then paste both URLs into Claude. Claude reads your data from the export URL and
+              writes new sessions to the sessions URL.
+            </p>
+            <pre className="font-mono text-xs bg-panel border border-border rounded p-3 overflow-x-auto whitespace-pre">
+{`POST ${exportUrlBase}/api/sessions?token=<RAW>
+Content-Type: application/json
+
+{
+  "session_at_local": "${new Date().toISOString().slice(0, 16)}",
+  "modality": "football",  // strength_upper | strength_lower | football | mobility | other
+  "duration_min": 50,      // optional, 1-600
+  "rpe": 7,                // optional, 1-10
+  "format": "6v6 2x25min", // optional
+  "notes": "..."           // optional
+}`}
+            </pre>
+            <p className="text-xs text-muted">
+              The export JSON already includes this schema and the write URL under{' '}
+              <code className="font-mono">context.write_endpoints.sessions</code>, so an AI reading
+              the export can discover the API on its own.
+            </p>
+          </div>
+        </details>
       </section>
     </div>
   )

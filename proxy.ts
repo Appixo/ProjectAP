@@ -7,6 +7,7 @@ const PUBLIC_PATHS = [
   '/auth/callback',
   '/api/strava/webhook',
   '/api/export',
+  '/api/sessions',
 ]
 
 function isPublic(path: string): boolean {

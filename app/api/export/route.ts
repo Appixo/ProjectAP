@@ -36,9 +36,9 @@ export async function GET(request: NextRequest) {
 
   const { data: tokenRow } = await admin
     .from('export_tokens')
-    .select('user_id, revoked')
+    .select('user_id, revoked, can_write')
     .eq('token_hash', hash)
-    .maybeSingle()
+    .maybeSingle<{ user_id: string; revoked: boolean; can_write: boolean }>()
 
   if (!tokenRow || tokenRow.revoked) return notFound()
 
@@ -92,6 +92,11 @@ export async function GET(request: NextRequest) {
   ])
 
   const today = todayInAmsterdam()
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin
+  const writeUrl = tokenRow.can_write
+    ? `${appUrl}/api/sessions?token=${raw}`
+    : null
+
   const context = {
     today,
     timezone: 'Europe/Amsterdam',
@@ -113,6 +118,36 @@ export async function GET(request: NextRequest) {
           updated_at: goalsRow.updated_at,
         }
       : null,
+    token_scope: tokenRow.can_write ? 'read+write' : 'read',
+    write_endpoints: {
+      sessions: {
+        url: writeUrl,
+        url_pattern: `${appUrl}/api/sessions?token=<WRITE_TOKEN>`,
+        method: 'POST',
+        content_type: 'application/json',
+        body_schema: {
+          session_at_local:
+            'string, YYYY-MM-DDTHH:MM in Europe/Amsterdam local time (required)',
+          modality:
+            'string, one of: strength_upper, strength_lower, football, mobility, other (required)',
+          duration_min: 'integer 1-600 (optional)',
+          rpe: 'integer 1-10 (optional)',
+          format: 'string up to 80 chars (optional)',
+          notes: 'string up to 4000 chars (optional)',
+        },
+        example_body: {
+          session_at_local: `${today}T18:30`,
+          modality: 'football',
+          duration_min: 50,
+          rpe: 7,
+          format: '6v6 2x25min',
+          notes: 'Felt sharp in first half.',
+        },
+        notes: tokenRow.can_write
+          ? 'This token has write scope. POST to the url above to add a training session.'
+          : 'This token is read-only. Ask the dashboard owner for a token with write scope to add sessions.',
+      },
+    },
   }
 
   return NextResponse.json(
