@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createHash } from 'crypto'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { resolveApiAuth, touchTokenLastUsed } from '@/lib/auth/api-auth'
 import { todayInAmsterdam } from '@/lib/time/week'
 
 function notFound() {
@@ -27,25 +27,13 @@ function daysBetween(fromYmd: string, toYmd: string | null): number | null {
 }
 
 export async function GET(request: NextRequest) {
-  const url = new URL(request.url)
-  const raw = url.searchParams.get('token')
-  if (!raw) return notFound()
+  const auth = await resolveApiAuth(request)
+  if (!auth) return notFound()
+  if (auth.source === 'token' && auth.rawToken) {
+    await touchTokenLastUsed(auth.rawToken)
+  }
 
-  const hash = createHash('sha256').update(raw).digest('hex')
   const admin = createSupabaseAdminClient()
-
-  const { data: tokenRow } = await admin
-    .from('export_tokens')
-    .select('user_id, revoked, can_write')
-    .eq('token_hash', hash)
-    .maybeSingle<{ user_id: string; revoked: boolean; can_write: boolean }>()
-
-  if (!tokenRow || tokenRow.revoked) return notFound()
-
-  await admin
-    .from('export_tokens')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('token_hash', hash)
 
   const [
     { data: activities },
@@ -62,7 +50,7 @@ export async function GET(request: NextRequest) {
           'average_heartrate, max_heartrate, average_speed_mps, max_speed_mps, ' +
           'has_heartrate',
       )
-      .eq('user_id', tokenRow.user_id)
+      .eq('user_id', auth.userId)
       .order('start_at', { ascending: false }),
     admin
       .from('daily_log')
@@ -70,7 +58,7 @@ export async function GET(request: NextRequest) {
         'log_date, sleep_hours, sleep_score, energy, ' +
           'habit_strength_done, habit_no_alcohol, habit_in_bed_on_time, notes',
       )
-      .eq('user_id', tokenRow.user_id)
+      .eq('user_id', auth.userId)
       .order('log_date', { ascending: false }),
     admin
       .from('training_sessions')
@@ -78,7 +66,7 @@ export async function GET(request: NextRequest) {
         'id, session_at, session_at_local, timezone, modality, ' +
           'duration_min, rpe, format, notes',
       )
-      .eq('user_id', tokenRow.user_id)
+      .eq('user_id', auth.userId)
       .order('session_at', { ascending: false }),
     admin
       .from('goals')
@@ -86,16 +74,23 @@ export async function GET(request: NextRequest) {
         'primary_goal, primary_event_date, secondary_goal, ' +
           'secondary_event_date, secondary_kind, notes, updated_at',
       )
-      .eq('user_id', tokenRow.user_id)
+      .eq('user_id', auth.userId)
       .maybeSingle<GoalsRow>(),
-    admin.auth.admin.getUserById(tokenRow.user_id),
+    admin.auth.admin.getUserById(auth.userId),
   ])
 
   const today = todayInAmsterdam()
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin
-  const writeUrl = tokenRow.can_write
-    ? `${appUrl}/api/sessions?token=${raw}`
-    : null
+
+  // The writable session URL. For session-authed callers (logged-in browser),
+  // /api/sessions also accepts the session cookie, so the bare URL works.
+  // For token callers, embed the token only if it has write scope.
+  let writeUrl: string | null = null
+  if (auth.source === 'session' && auth.canWrite) {
+    writeUrl = `${appUrl}/api/sessions`
+  } else if (auth.source === 'token' && auth.canWrite && auth.rawToken) {
+    writeUrl = `${appUrl}/api/sessions?token=${auth.rawToken}`
+  }
 
   const context = {
     today,
@@ -118,11 +113,17 @@ export async function GET(request: NextRequest) {
           updated_at: goalsRow.updated_at,
         }
       : null,
-    token_scope: tokenRow.can_write ? 'read+write' : 'read',
+    auth: {
+      source: auth.source,
+      scope: auth.canWrite ? 'read+write' : 'read',
+    },
     write_endpoints: {
       sessions: {
         url: writeUrl,
-        url_pattern: `${appUrl}/api/sessions?token=<WRITE_TOKEN>`,
+        url_pattern:
+          auth.source === 'session'
+            ? `${appUrl}/api/sessions`
+            : `${appUrl}/api/sessions?token=<WRITE_TOKEN>`,
         method: 'POST',
         content_type: 'application/json',
         body_schema: {
@@ -143,9 +144,9 @@ export async function GET(request: NextRequest) {
           format: '6v6 2x25min',
           notes: 'Felt sharp in first half.',
         },
-        notes: tokenRow.can_write
-          ? 'This token has write scope. POST to the url above to add a training session.'
-          : 'This token is read-only. Ask the dashboard owner for a token with write scope to add sessions.',
+        notes: auth.canWrite
+          ? 'POST a JSON body matching body_schema to add a training session.'
+          : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
       },
     },
   }

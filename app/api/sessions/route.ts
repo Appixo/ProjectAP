@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { createHash } from 'crypto'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { resolveApiAuth, touchTokenLastUsed } from '@/lib/auth/api-auth'
 import { amsterdamWallClockToUtcIso } from '@/lib/time/week'
 
 const VALID_MODALITIES = [
@@ -57,21 +57,9 @@ function stringOrNull(v: unknown, maxLen: number): string | null | 'invalid' {
 }
 
 export async function POST(request: NextRequest) {
-  const url = new URL(request.url)
-  const raw = url.searchParams.get('token')
-  if (!raw) return jsonError(401, 'missing_token')
-
-  const hash = createHash('sha256').update(raw).digest('hex')
-  const admin = createSupabaseAdminClient()
-
-  const { data: tokenRow } = await admin
-    .from('export_tokens')
-    .select('user_id, revoked, can_write')
-    .eq('token_hash', hash)
-    .maybeSingle<{ user_id: string; revoked: boolean; can_write: boolean }>()
-
-  if (!tokenRow || tokenRow.revoked) return jsonError(404, 'not_found')
-  if (!tokenRow.can_write) return jsonError(403, 'token_read_only')
+  const auth = await resolveApiAuth(request)
+  if (!auth) return jsonError(401, 'unauthorized')
+  if (!auth.canWrite) return jsonError(403, 'token_read_only')
 
   let body: SessionPayload
   try {
@@ -124,10 +112,11 @@ export async function POST(request: NextRequest) {
     return jsonError(400, 'time_conversion_failed')
   }
 
+  const admin = createSupabaseAdminClient()
   const { data: inserted, error } = await admin
     .from('training_sessions')
     .insert({
-      user_id: tokenRow.user_id,
+      user_id: auth.userId,
       session_at: utcIso,
       session_at_local: padded,
       timezone: 'Europe/Amsterdam',
@@ -144,10 +133,9 @@ export async function POST(request: NextRequest) {
     return jsonError(500, 'insert_failed', error?.message)
   }
 
-  await admin
-    .from('export_tokens')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('token_hash', hash)
+  if (auth.source === 'token' && auth.rawToken) {
+    await touchTokenLastUsed(auth.rawToken)
+  }
 
   return NextResponse.json(
     { ok: true, session: inserted },
