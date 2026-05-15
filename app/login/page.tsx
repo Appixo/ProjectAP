@@ -39,8 +39,8 @@ function LoginForm() {
   if (sent) {
     return (
       <div className="max-w-sm w-full text-center space-y-2">
-        <h1 className="text-2xl font-semibold">Check your email</h1>
-        <p className="text-sm text-neutral-600">
+        <h1 className="text-2xl font-semibold text-ink">Check your email</h1>
+        <p className="text-sm text-muted">
           Sent a sign-in link to <span className="font-mono">{email}</span>.
         </p>
       </div>
@@ -49,14 +49,14 @@ function LoginForm() {
 
   return (
     <form onSubmit={onSubmit} className="max-w-sm w-full space-y-4">
-      <h1 className="text-2xl font-semibold">Sign in</h1>
+      <h1 className="text-2xl font-semibold text-ink">Sign in</h1>
       {denied && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-warn">
           That email is not authorised for this app.
         </p>
       )}
       {callbackError && !denied && (
-        <p className="text-sm text-red-600">
+        <p className="text-sm text-warn">
           Sign-in link could not be verified. Request a new one.
         </p>
       )}
@@ -66,13 +66,13 @@ function LoginForm() {
         value={email}
         onChange={e => setEmail(e.target.value)}
         placeholder="you@example.com"
-        className="w-full rounded border border-neutral-300 px-3 py-2 outline-none focus:border-neutral-900"
+        className="w-full rounded border border-border bg-panel text-ink px-3 py-2 outline-none focus:border-border-2"
       />
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-warn">{error}</p>}
       <button
         type="submit"
         disabled={loading || !email}
-        className="w-full rounded bg-black text-white px-3 py-2 disabled:opacity-50"
+        className="w-full rounded bg-ink text-bg px-3 py-2 font-medium disabled:opacity-50 hover:opacity-90"
       >
         {loading ? 'Sending…' : 'Send magic link'}
       </button>

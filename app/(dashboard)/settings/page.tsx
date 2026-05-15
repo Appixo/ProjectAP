@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createHash, randomBytes } from 'crypto'
 import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { getAccountByAthlete, resyncWindow } from '@/lib/strava/sync'
 
 const STRAVA_OAUTH_STATE_COOKIE = 'strava_oauth_state'
 const NEW_TOKEN_COOKIE = 'new_export_token'
@@ -83,6 +85,49 @@ async function createExportToken(formData: FormData) {
 
   revalidatePath('/settings')
   redirect('/settings?new_token=1')
+}
+
+async function resyncRecent(formData: FormData) {
+  'use server'
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const daysRaw = Number(formData.get('days') ?? 7)
+  const days = Number.isFinite(daysRaw)
+    ? Math.min(90, Math.max(1, Math.floor(daysRaw)))
+    : 7
+
+  const { data: account } = await supabase
+    .from('strava_account')
+    .select('athlete_id')
+    .eq('user_id', user.id)
+    .maybeSingle<{ athlete_id: number }>()
+  if (!account) redirect('/settings?resync_error=not_connected')
+
+  const admin = createSupabaseAdminClient()
+  const full = await getAccountByAthlete(admin, account.athlete_id)
+  if (!full) redirect('/settings?resync_error=not_connected')
+
+  let count = 0
+  let errorMsg: string | null = null
+  try {
+    count = await resyncWindow(admin, full, days)
+  } catch (err) {
+    errorMsg = err instanceof Error ? err.message : 'unknown'
+  }
+
+  revalidatePath('/settings')
+  revalidatePath('/')
+
+  if (errorMsg) {
+    redirect(
+      `/settings?resync_error=${encodeURIComponent(errorMsg.slice(0, 120))}`,
+    )
+  }
+  redirect(`/settings?resynced=${count}`)
 }
 
 async function revokeExportToken(formData: FormData) {
@@ -167,34 +212,34 @@ export default async function SettingsPage({
   const exportUrlBase = process.env.NEXT_PUBLIC_APP_URL ?? ''
 
   return (
-    <div className="space-y-10 max-w-2xl">
-      <h1 className="text-2xl font-semibold">Settings</h1>
+    <div className="space-y-10 max-w-2xl p-6">
+      <h1 className="text-2xl font-semibold text-ink">Settings</h1>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Strava</h2>
-        {connected && <p className="text-sm text-green-700">Connected.</p>}
+        <h2 className="text-lg font-semibold text-ink">Strava</h2>
+        {connected && <p className="text-sm text-success">Connected.</p>}
         {disconnected && (
-          <p className="text-sm text-neutral-600">Disconnected.</p>
+          <p className="text-sm text-muted">Disconnected.</p>
         )}
         {stravaError && (
-          <p className="text-sm text-red-600">Strava error: {stravaError}</p>
+          <p className="text-sm text-warn">Strava error: {stravaError}</p>
         )}
 
         {account ? (
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-sm text-ink-2">
             <p>
               Athlete ID:{' '}
               <span className="font-mono">{account.athlete_id}</span>
             </p>
             {updatedAt && (
-              <p className="text-neutral-600">
+              <p className="text-muted">
                 Token last updated {updatedAt}. Refreshes automatically.
               </p>
             )}
             <form action={disconnectStrava}>
               <button
                 type="submit"
-                className="text-sm rounded border border-neutral-300 px-3 py-1.5 hover:bg-neutral-100"
+                className="text-sm rounded border border-border bg-panel text-ink px-3 py-1.5 hover:border-border-2"
               >
                 Disconnect Strava
               </button>
@@ -210,25 +255,58 @@ export default async function SettingsPage({
             </button>
           </form>
         )}
+
+        {account && (
+          <form action={resyncRecent} className="flex items-end gap-2 pt-2">
+            <div className="space-y-1">
+              <label htmlFor="days" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Resync last N days
+              </label>
+              <input
+                id="days"
+                name="days"
+                type="number"
+                min={1}
+                max={90}
+                defaultValue={7}
+                className="rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm w-24"
+              />
+            </div>
+            <button
+              type="submit"
+              className="rounded border border-border bg-panel text-ink px-3 py-2 text-sm hover:border-border-2"
+            >
+              Resync
+            </button>
+            {typeof sp.resynced === 'string' && (
+              <span className="text-sm text-success">
+                Resynced {sp.resynced} runs.
+              </span>
+            )}
+            {typeof sp.resync_error === 'string' && (
+              <span className="text-sm text-warn">{sp.resync_error}</span>
+            )}
+          </form>
+        )}
       </section>
 
       <section className="space-y-3">
-        <h2 className="text-lg font-semibold">Export tokens</h2>
-        <p className="text-sm text-neutral-600">
+        <h2 className="text-lg font-semibold text-ink">Export tokens</h2>
+        <p className="text-sm text-muted">
           Use a token to fetch all your data as JSON from{' '}
-          <code className="font-mono">/api/export?token=…</code>. Treat each
+          <code className="font-mono text-ink-2">/api/export?token=…</code>. Treat each
           token like a password.
         </p>
 
         {newTokenValue && (
-          <div className="rounded border border-amber-300 bg-amber-50 p-3 text-sm space-y-2">
-            <p className="font-semibold text-amber-900">
+          <div className="rounded border border-accent bg-accent-soft p-3 text-sm space-y-2">
+            <p className="font-semibold text-ink">
               Save this token now — it won&rsquo;t be shown again.
             </p>
-            <code className="block font-mono break-all text-xs bg-white border border-amber-200 rounded p-2">
+            <code className="block font-mono break-all text-xs bg-panel border border-border rounded p-2 text-ink">
               {newTokenValue}
             </code>
-            <p className="text-xs text-amber-900">
+            <p className="text-xs text-ink-2">
               Full URL:{' '}
               <code className="font-mono break-all">
                 {exportUrlBase}/api/export?token={newTokenValue}
@@ -237,15 +315,15 @@ export default async function SettingsPage({
           </div>
         )}
         {tokenError && (
-          <p className="text-sm text-red-600">Token error: {tokenError}</p>
+          <p className="text-sm text-warn">Token error: {tokenError}</p>
         )}
         {justRevoked && (
-          <p className="text-sm text-neutral-600">Token revoked.</p>
+          <p className="text-sm text-muted">Token revoked.</p>
         )}
 
         <form action={createExportToken} className="flex items-end gap-2">
           <div className="space-y-1">
-            <label htmlFor="label" className="text-sm text-neutral-600">
+            <label htmlFor="label" className="text-sm text-muted">
               Label
             </label>
             <input
@@ -254,12 +332,12 @@ export default async function SettingsPage({
               type="text"
               placeholder="e.g. claude-analysis"
               maxLength={60}
-              className="rounded border border-neutral-300 px-3 py-1.5 text-sm w-64"
+              className="rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm w-64"
             />
           </div>
           <button
             type="submit"
-            className="rounded bg-black text-white px-3 py-2 text-sm"
+            className="rounded bg-ink text-bg px-3 py-2 text-sm font-medium hover:opacity-90"
           >
             Create token
           </button>
@@ -269,7 +347,7 @@ export default async function SettingsPage({
           <div className="overflow-x-auto">
             <table className="w-full text-sm border-collapse">
               <thead>
-                <tr className="text-left text-neutral-600 border-b border-neutral-200">
+                <tr className="text-left text-muted border-b border-border">
                   <th className="py-2 pr-4 font-medium">Label</th>
                   <th className="py-2 pr-4 font-medium">Hash</th>
                   <th className="py-2 pr-4 font-medium">Created</th>
@@ -279,7 +357,7 @@ export default async function SettingsPage({
               </thead>
               <tbody>
                 {tokens.map(t => (
-                  <tr key={t.token_hash} className="border-b border-neutral-100">
+                  <tr key={t.token_hash} className="border-b border-border text-ink-2">
                     <td className="py-2 pr-4">{t.label ?? '—'}</td>
                     <td className="py-2 pr-4 font-mono text-xs">
                       {shortHash(t.token_hash)}
@@ -292,7 +370,7 @@ export default async function SettingsPage({
                     </td>
                     <td className="py-2 text-right">
                       {t.revoked ? (
-                        <span className="text-xs text-neutral-500">revoked</span>
+                        <span className="text-xs text-muted">revoked</span>
                       ) : (
                         <form action={revokeExportToken}>
                           <input
@@ -302,7 +380,7 @@ export default async function SettingsPage({
                           />
                           <button
                             type="submit"
-                            className="text-xs text-red-700 hover:underline"
+                            className="text-xs text-warn hover:underline"
                           >
                             Revoke
                           </button>

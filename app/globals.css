@@ -1,7 +1,49 @@
 @import "tailwindcss";
 
+@custom-variant light (&:where(.light, .light *));
+
 @theme {
-  /* surface + ink */
+  /* Dark mode is the default. Light mode is an opt-in override on :root.light. */
+
+  /* surface + ink (dark) */
+  --color-bg:        oklch(0.16 0.006 250);
+  --color-panel:     oklch(0.21 0.007 250);
+  --color-ink:       oklch(0.96 0.004 85);
+  --color-ink-2:     oklch(0.80 0.006 85);
+  --color-muted:     oklch(0.60 0.008 85);
+  --color-faint:     oklch(0.40 0.008 85);
+  --color-border:    oklch(0.30 0.008 250);
+  --color-border-2:  oklch(0.38 0.008 250);
+
+  /* signal (dark) */
+  --color-accent:        oklch(0.72 0.10 230);
+  --color-accent-soft:   oklch(0.72 0.10 230 / 0.16);
+  --color-success:       oklch(0.72 0.10 145);
+  --color-warn:          oklch(0.78 0.12 60);
+
+  /* semantic palette — meaning, not decoration.
+     amber = intensity / aggressive load
+     green = healthy progression / recovery
+     blue  = primary signal / long efforts
+     ink   = baseline / easy default
+     faint = below baseline / cutback */
+  --color-type-easy:     oklch(0.80 0.006 85);
+  --color-type-tempo:    oklch(0.74 0.13 55);
+  --color-type-long:     oklch(0.72 0.10 230);
+  --color-type-recovery: oklch(0.72 0.10 145);
+  --color-type-race:     oklch(0.68 0.16 25);
+
+  --color-zone-build:    oklch(0.66 0.10 145);
+  --color-zone-neutral:  oklch(0.80 0.006 85);
+  --color-zone-spike:    oklch(0.78 0.12 60);
+  --color-zone-cut:      oklch(0.42 0.008 85);
+
+  --font-sans: Helvetica, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, Menlo, Consolas, monospace;
+}
+
+/* Light mode override */
+:root.light {
   --color-bg:        oklch(0.985 0.003 85);
   --color-panel:     oklch(1     0     0);
   --color-ink:       oklch(0.22  0.01  85);
@@ -11,18 +53,11 @@
   --color-border:    oklch(0.9   0.005 85);
   --color-border-2:  oklch(0.83  0.005 85);
 
-  /* signal */
   --color-accent:        oklch(0.45 0.08 230);
   --color-accent-soft:   oklch(0.45 0.08 230 / 0.10);
   --color-success:       oklch(0.55 0.08 145);
   --color-warn:          oklch(0.62 0.10  60);
 
-  /* semantic palette — meaning, not decoration.
-     amber = intensity / aggressive load
-     green = healthy progression / recovery
-     blue  = primary signal / long efforts
-     ink   = baseline / easy default
-     faint = below baseline / cutback */
   --color-type-easy:     oklch(0.22 0.01 85);
   --color-type-tempo:    oklch(0.62 0.13 55);
   --color-type-long:     oklch(0.45 0.08 230);
@@ -33,9 +68,6 @@
   --color-zone-neutral:  oklch(0.22 0.01 85);
   --color-zone-spike:    oklch(0.68 0.13 60);
   --color-zone-cut:      oklch(0.78 0.008 85);
-
-  --font-sans: Helvetica, "Helvetica Neue", Arial, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, Menlo, Consolas, monospace;
 }
 
 html, body {
@@ -49,4 +81,12 @@ body {
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+}
+
+/* Native form controls track theme */
+:root {
+  color-scheme: dark;
+}
+:root.light {
+  color-scheme: light;
 }

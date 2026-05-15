@@ -13,6 +13,14 @@ export const metadata: Metadata = {
   description: "Personal marathon-prep training dashboard.",
 };
 
+const noFlashScript = `(() => {
+  try {
+    if (localStorage.getItem('theme') === 'light') {
+      document.documentElement.classList.add('light');
+    }
+  } catch (e) {}
+})();`;
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -20,6 +28,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${jetbrainsMono.variable} h-full`}>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: noFlashScript }} />
+      </head>
       <body className="min-h-full flex flex-col antialiased">{children}</body>
     </html>
   );
