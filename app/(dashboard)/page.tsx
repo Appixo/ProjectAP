@@ -2,7 +2,18 @@ import { createSupabaseServerClient } from '@/lib/supabase/server'
 import { DashboardHeader } from '@/components/dashboard/Header'
 import { DailyLogCard } from '@/components/dashboard/DailyLogCard'
 import { SessionLogPicker } from '@/components/dashboard/SessionLogPicker'
-import { WeekReview, type WeekReviewActivity, type WeekReviewLog } from '@/components/dashboard/WeekReview'
+import {
+  WeekReview,
+  type WeekReviewActivity,
+  type WeekReviewLog,
+  type WeekReviewSession,
+  type WeekReviewGoals,
+} from '@/components/dashboard/WeekReview'
+import {
+  WeekStrip,
+  type WeekStripRun,
+  type WeekStripSession,
+} from '@/components/dashboard/WeekStrip'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
 import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
@@ -43,6 +54,33 @@ interface RawDailyLog {
   habit_in_bed_on_time: boolean
 }
 
+interface RawSession {
+  id: string
+  session_at: string
+  session_at_local: string
+  modality: string
+  duration_min: number | null
+  rpe: number | null
+}
+
+interface RawGoals {
+  primary_goal: string
+  primary_event_date: string | null
+  secondary_goal: string | null
+  secondary_event_date: string | null
+  secondary_kind: string | null
+  notes: string | null
+}
+
+function daysBetween(fromYmd: string, toYmd: string | null): number | null {
+  if (!toYmd) return null
+  const [fy, fm, fd] = fromYmd.split('-').map(Number)
+  const [ty, tm, td] = toYmd.split('-').map(Number)
+  const fromMs = Date.UTC(fy, fm - 1, fd)
+  const toMs = Date.UTC(ty, tm - 1, td)
+  return Math.round((toMs - fromMs) / 86400000)
+}
+
 function formatMonthDay(ymd: string): string {
   return new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-GB', {
     timeZone: 'UTC',
@@ -78,33 +116,74 @@ export default async function DashboardPage() {
     new Date(now.getTime() - DAYS_FOR_SLEEP * 86400 * 1000),
   )
 
-  const [{ data: rawActivities }, { data: sleepLogs }, { data: lastWeekLogs }] =
-    await Promise.all([
-      supabase
-        .from('activities')
-        .select(
-          'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
-        )
-        .eq('type', 'Run')
-        .gte('start_at', sinceIso)
-        .order('start_at', { ascending: true })
-        .returns<RawActivity[]>(),
-      supabase
-        .from('daily_log')
-        .select('log_date, sleep_hours')
-        .gte('log_date', sleepCutoffYmd)
-        .order('log_date', { ascending: true })
-        .returns<{ log_date: string; sleep_hours: number | null }[]>(),
-      supabase
-        .from('daily_log')
-        .select(
-          'log_date, sleep_hours, sleep_score, energy, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
-        )
-        .gte('log_date', lastWeekMonday)
-        .lt('log_date', todayMonday)
-        .order('log_date', { ascending: true })
-        .returns<RawDailyLog[]>(),
-    ])
+  const nextMondayYmd = addWeeks(todayMonday, 1)
+  const lastWeekStartIso = new Date(
+    lastWeekMonday + 'T00:00:00Z',
+  ).toISOString()
+  const thisWeekStartIso = new Date(
+    todayMonday + 'T00:00:00Z',
+  ).toISOString()
+  const nextWeekStartIso = new Date(
+    nextMondayYmd + 'T00:00:00Z',
+  ).toISOString()
+
+  const [
+    { data: rawActivities },
+    { data: sleepLogs },
+    { data: lastWeekLogs },
+    { data: thisWeekSessionsRaw },
+    { data: lastWeekSessionsRaw },
+    { data: goalsRaw },
+  ] = await Promise.all([
+    supabase
+      .from('activities')
+      .select(
+        'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
+      )
+      .eq('type', 'Run')
+      .gte('start_at', sinceIso)
+      .order('start_at', { ascending: true })
+      .returns<RawActivity[]>(),
+    supabase
+      .from('daily_log')
+      .select('log_date, sleep_hours')
+      .gte('log_date', sleepCutoffYmd)
+      .order('log_date', { ascending: true })
+      .returns<{ log_date: string; sleep_hours: number | null }[]>(),
+    supabase
+      .from('daily_log')
+      .select(
+        'log_date, sleep_hours, sleep_score, energy, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
+      )
+      .gte('log_date', lastWeekMonday)
+      .lt('log_date', todayMonday)
+      .order('log_date', { ascending: true })
+      .returns<RawDailyLog[]>(),
+    supabase
+      .from('training_sessions')
+      .select(
+        'id, session_at, session_at_local, modality, duration_min, rpe',
+      )
+      .gte('session_at', thisWeekStartIso)
+      .lt('session_at', nextWeekStartIso)
+      .order('session_at', { ascending: true })
+      .returns<RawSession[]>(),
+    supabase
+      .from('training_sessions')
+      .select(
+        'id, session_at, session_at_local, modality, duration_min, rpe',
+      )
+      .gte('session_at', lastWeekStartIso)
+      .lt('session_at', thisWeekStartIso)
+      .order('session_at', { ascending: true })
+      .returns<RawSession[]>(),
+    supabase
+      .from('goals')
+      .select(
+        'primary_goal, primary_event_date, secondary_goal, secondary_event_date, secondary_kind, notes',
+      )
+      .maybeSingle<RawGoals>(),
+  ])
 
   const activities = rawActivities ?? []
   const types = classifyRuns(
@@ -257,6 +336,45 @@ export default async function DashboardPage() {
     habit_in_bed_on_time: l.habit_in_bed_on_time,
   }))
 
+  const thisWeekSessions = thisWeekSessionsRaw ?? []
+  const lastWeekSessions = lastWeekSessionsRaw ?? []
+
+  const stripRuns: WeekStripRun[] = thisWeekRuns.map(r => ({
+    id: r.id,
+    start_at: r.start_at,
+    distance_m: r.distance_m,
+    moving_time_s: r.moving_time_s,
+    runType: r.runType,
+  }))
+  const stripSessions: WeekStripSession[] = thisWeekSessions.map(s => ({
+    id: s.id,
+    session_at_local: s.session_at_local,
+    modality: s.modality,
+    duration_min: s.duration_min,
+    rpe: s.rpe,
+  }))
+
+  const reviewSessions: WeekReviewSession[] = lastWeekSessions.map(s => ({
+    id: s.id,
+    session_at_local: s.session_at_local,
+    modality: s.modality,
+    duration_min: s.duration_min,
+    rpe: s.rpe,
+  }))
+
+  const goalsForReview: WeekReviewGoals | null = goalsRaw
+    ? {
+        primary_goal: goalsRaw.primary_goal,
+        primary_event_date: goalsRaw.primary_event_date,
+        days_to_primary: daysBetween(todayYmd, goalsRaw.primary_event_date),
+        secondary_goal: goalsRaw.secondary_goal,
+        secondary_event_date: goalsRaw.secondary_event_date,
+        days_to_secondary: daysBetween(todayYmd, goalsRaw.secondary_event_date),
+        secondary_kind: goalsRaw.secondary_kind,
+        notes: goalsRaw.notes,
+      }
+    : null
+
   return (
     <div className="max-w-[1200px] mx-auto px-7 pt-8 pb-20">
       <DashboardHeader />
@@ -267,12 +385,23 @@ export default async function DashboardPage() {
         <SessionLogPicker todayYmd={todayYmd} />
       </section>
 
+      {/* this week — cross-modal day grid */}
+      <WeekStrip
+        weekLabel={weekLabelThisWeek}
+        monday={todayMonday}
+        todayYmd={todayYmd}
+        runs={stripRuns}
+        sessions={stripSessions}
+      />
+
       {/* week review */}
       <WeekReview
         weekLabel={weekLabelReview}
         thisWeek={reviewThisWeek}
         lastWeek={reviewActivities}
         logs={reviewLogs}
+        sessions={reviewSessions}
+        goals={goalsForReview}
       />
 
       {/* trend strip — 2x2 */}

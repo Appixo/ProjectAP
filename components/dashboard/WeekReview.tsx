@@ -21,11 +21,32 @@ export interface WeekReviewLog {
   habit_in_bed_on_time: boolean
 }
 
+export interface WeekReviewSession {
+  id: string
+  session_at_local: string
+  modality: string
+  duration_min: number | null
+  rpe: number | null
+}
+
+export interface WeekReviewGoals {
+  primary_goal: string
+  primary_event_date: string | null
+  days_to_primary: number | null
+  secondary_goal: string | null
+  secondary_event_date: string | null
+  days_to_secondary: number | null
+  secondary_kind: string | null
+  notes: string | null
+}
+
 export interface WeekReviewProps {
-  weekLabel: string // e.g. "May 5 – May 11 · week 3"
+  weekLabel: string
   thisWeek: WeekReviewActivity[]
   lastWeek: WeekReviewActivity[]
   logs: WeekReviewLog[]
+  sessions: WeekReviewSession[]
+  goals: WeekReviewGoals | null
 }
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
@@ -55,39 +76,76 @@ function typeDotClass(type: RunType): string {
   }[type]
 }
 
-export function WeekReview({ weekLabel, thisWeek, lastWeek, logs }: WeekReviewProps) {
-  // The "Week review" card shows the last *completed* week.
+function sessionWeekday(localIso: string): string {
+  const [y, m, d] = localIso.slice(0, 10).split('-').map(Number)
+  // Construct as UTC; weekday is timezone-stable for a YYYY-MM-DD.
+  const date = new Date(Date.UTC(y, m - 1, d))
+  return WEEKDAY[date.getUTCDay()]
+}
+
+export function WeekReview({
+  weekLabel,
+  thisWeek,
+  lastWeek,
+  logs,
+  sessions,
+  goals,
+}: WeekReviewProps) {
   const review = lastWeek
   const km = sumKm(review)
   const runs = review.length
-  const wow = pctChange(km, sumKm(thisWeek.length === 0 ? [] : []))
-  const wowVsPrev = pctChange(
-    km,
-    // Compare against the week before this completed one — unavailable in
-    // current data window, so show vs this-week-so-far for now.
-    sumKm(thisWeek),
-  )
-  void wow
+  const wowVsPrev = pctChange(km, sumKm(thisWeek))
 
-  const longest = review.reduce<
-    WeekReviewActivity | null
-  >((acc, a) => (acc && acc.distance_m > a.distance_m ? acc : a), null)
+  const longest = review.reduce<WeekReviewActivity | null>(
+    (acc, a) => (acc && acc.distance_m > a.distance_m ? acc : a),
+    null,
+  )
   const easyPace = avgEasyPaceMinPerKm(review)
   const easyHr = avgHr(review.filter(a => a.runType === 'easy'))
 
-  const quality = review.filter(a => a.runType === 'tempo' || a.runType === 'long')
+  const quality = review.filter(
+    a => a.runType === 'tempo' || a.runType === 'long',
+  )
 
-  const sleepAvg = avg(logs.map(l => l.sleep_hours).filter((n): n is number => n !== null))
+  const strengthSessions = sessions.filter(
+    s => s.modality === 'strength_upper' || s.modality === 'strength_lower',
+  )
+  const upperCount = strengthSessions.filter(
+    s => s.modality === 'strength_upper',
+  ).length
+  const lowerCount = strengthSessions.filter(
+    s => s.modality === 'strength_lower',
+  ).length
+  const strengthMin = strengthSessions.reduce(
+    (s, x) => s + (x.duration_min ?? 0),
+    0,
+  )
+  const strengthRpeAvg = avg(
+    strengthSessions
+      .map(s => s.rpe)
+      .filter((n): n is number => n !== null),
+  )
+
+  const footballSessions = sessions.filter(s => s.modality === 'football')
+  const footballMin = footballSessions.reduce(
+    (s, x) => s + (x.duration_min ?? 0),
+    0,
+  )
+  const footballRpeAvg = avg(
+    footballSessions.map(s => s.rpe).filter((n): n is number => n !== null),
+  )
+
+  const mobilityCount = sessions.filter(s => s.modality === 'mobility').length
+
+  const sleepAvg = avg(
+    logs.map(l => l.sleep_hours).filter((n): n is number => n !== null),
+  )
   const sleepScoreAvg = avg(
     logs.map(l => l.sleep_score).filter((n): n is number => n !== null),
   )
-  const energyAvg = avg(logs.map(l => l.energy).filter((n): n is number => n !== null))
-  const habitCounts = {
-    strength: logs.filter(l => l.habit_strength_done).length,
-    noAlc: logs.filter(l => l.habit_no_alcohol).length,
-    inBed: logs.filter(l => l.habit_in_bed_on_time).length,
-  }
-  const days = logs.length
+  const energyAvg = avg(
+    logs.map(l => l.energy).filter((n): n is number => n !== null),
+  )
 
   const delta = fmtDelta(wowVsPrev)
 
@@ -151,7 +209,7 @@ export function WeekReview({ weekLabel, thisWeek, lastWeek, logs }: WeekReviewPr
               </>
             }
           />
-          {quality.length > 0 ? (
+          {quality.length > 0 && (
             <div className="mt-3">
               <div className="text-[11px] text-muted uppercase tracking-[0.06em]">
                 Quality
@@ -167,20 +225,60 @@ export function WeekReview({ weekLabel, thisWeek, lastWeek, logs }: WeekReviewPr
                 ))}
               </div>
             </div>
-          ) : null}
+          )}
         </div>
 
-        {/* STRENGTH — stub */}
+        {/* STRENGTH — live */}
         <div className="px-5 py-4 border-r border-border">
           <h3 className="m-0 mb-3 text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">
             Strength
           </h3>
-          <div className="text-[12px] text-faint leading-[1.6]">
-            <p className="m-0">
-              Strength tracking is not wired up yet. Coming with a{' '}
-              <span className="font-mono">strength_session</span> schema.
-            </p>
-          </div>
+          {strengthSessions.length === 0 ? (
+            <div className="text-[12px] text-faint leading-[1.6]">
+              <p className="m-0">No strength sessions logged.</p>
+            </div>
+          ) : (
+            <>
+              <Stat
+                k="Sessions"
+                v={
+                  <>
+                    {strengthSessions.length}
+                    <span className="text-[12px] text-muted tracking-normal ml-1.5">
+                      {upperCount} up · {lowerCount} low
+                    </span>
+                  </>
+                }
+              />
+              <Stat
+                k="Total time"
+                v={
+                  <>
+                    {strengthMin} <span className="text-[12px] text-muted tracking-normal ml-1.5">min</span>
+                  </>
+                }
+              />
+              {strengthRpeAvg !== null && (
+                <Stat
+                  k="Avg RPE"
+                  v={strengthRpeAvg.toFixed(1)}
+                />
+              )}
+              <div className="mt-3">
+                <div className="text-[11px] text-muted uppercase tracking-[0.06em]">
+                  Days
+                </div>
+                <div className="text-[12px] text-ink-2 mt-0.5 flex flex-wrap gap-x-3 gap-y-1">
+                  {strengthSessions.map(s => (
+                    <span key={s.id} className="inline-flex items-center">
+                      <span className="inline-block w-[7px] h-[7px] rounded-full mr-1.5 bg-accent" />
+                      {sessionWeekday(s.session_at_local)} {s.modality === 'strength_upper' ? 'upper' : 'lower'}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* OTHER */}
@@ -190,7 +288,18 @@ export function WeekReview({ weekLabel, thisWeek, lastWeek, logs }: WeekReviewPr
           </h3>
           <Stat
             k="Football"
-            sub={<span className="text-faint">no manual sessions logged</span>}
+            v={
+              footballSessions.length > 0 ? (
+                <>
+                  {footballSessions.length}
+                  <span className="text-[12px] text-muted tracking-normal ml-1.5">
+                    {footballMin} min{footballRpeAvg !== null ? ` · RPE ${footballRpeAvg.toFixed(1)}` : ''}
+                  </span>
+                </>
+              ) : (
+                <span className="text-faint text-[14px] font-normal">none</span>
+              )
+            }
           />
           <Stat
             k="Sleep"
@@ -224,38 +333,76 @@ export function WeekReview({ weekLabel, thisWeek, lastWeek, logs }: WeekReviewPr
               )
             }
           />
-          <Stat
-            k="Habits"
-            sub={
-              days > 0
-                ? `strength ${habitCounts.strength}/${days} · no-alc ${habitCounts.noAlc}/${days} · in-bed ${habitCounts.inBed}/${days}`
-                : 'no logs this week'
-            }
-          />
+          {mobilityCount > 0 && (
+            <Stat
+              k="Mobility"
+              v={
+                <>
+                  {mobilityCount}
+                  <span className="text-[12px] text-muted tracking-normal ml-1.5">
+                    session{mobilityCount === 1 ? '' : 's'}
+                  </span>
+                </>
+              }
+            />
+          )}
         </div>
 
-        {/* NEXT WEEK — stub */}
+        {/* PLAN — live from goals */}
         <div className="px-5 py-4">
           <h3 className="m-0 mb-3 text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">
-            Next week
+            Plan
           </h3>
-          <div className="text-[11px] text-muted uppercase tracking-[0.06em]">
-            Constraints
-          </div>
-          <div className="flex flex-wrap gap-1.5 mt-1 mb-3">
-            <span className="font-mono text-[11px] text-faint bg-bg border border-border rounded-full px-2 py-0.5 -tracking-[0.01em]">
-              no plan rows yet
-            </span>
-          </div>
-          <div className="text-[11px] text-muted uppercase tracking-[0.06em]">
-            Athlete ask
-          </div>
-          <div className="text-[12px] text-faint bg-bg border border-border-2 rounded-[3px] px-2.5 py-2 mt-1 leading-[1.5] min-h-16">
-            <em className="text-muted not-italic">
-              add a question for your coach / future-you here once the
-              week_plan table exists
-            </em>
-          </div>
+          {goals ? (
+            <>
+              <Stat
+                k={`Primary · ${goals.primary_goal}`}
+                v={
+                  goals.days_to_primary !== null ? (
+                    <>
+                      {goals.days_to_primary}
+                      <span className="text-[12px] text-muted tracking-normal ml-1.5">
+                        days
+                      </span>
+                    </>
+                  ) : (
+                    '—'
+                  )
+                }
+                sub={goals.primary_event_date}
+              />
+              {goals.secondary_goal && (
+                <Stat
+                  k={`Secondary · ${goals.secondary_goal}${goals.secondary_kind ? ` (${goals.secondary_kind})` : ''}`}
+                  v={
+                    goals.days_to_secondary !== null ? (
+                      <>
+                        {goals.days_to_secondary}
+                        <span className="text-[12px] text-muted tracking-normal ml-1.5">
+                          days
+                        </span>
+                      </>
+                    ) : (
+                      '—'
+                    )
+                  }
+                  sub={goals.secondary_event_date}
+                />
+              )}
+              {goals.notes && (
+                <div className="mt-3 text-[11px] text-ink-2 bg-bg border border-border-2 rounded-[3px] px-2.5 py-2 leading-[1.5]">
+                  {goals.notes}
+                </div>
+              )}
+            </>
+          ) : (
+            <div className="text-[12px] text-faint leading-[1.6]">
+              <p className="m-0">
+                No goals row yet. Set primary + secondary on{' '}
+                <span className="font-mono">/settings</span>.
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </section>
