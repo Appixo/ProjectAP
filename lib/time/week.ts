@@ -40,3 +40,58 @@ export function addWeeks(ymd: string, n: number): string {
   date.setUTCDate(date.getUTCDate() + n * 7)
   return date.toISOString().slice(0, 10)
 }
+
+// Convert an Amsterdam wall-clock string (datetime-local input value) into
+// a UTC ISO instant. DST-aware via Intl.
+export function amsterdamWallClockToUtcIso(local: string): string {
+  const padded = local.length === 16 ? local + ':00' : local
+  // Treat the wall clock string as if it were UTC, then measure how far
+  // the Amsterdam projection of that instant drifts from the wall clock.
+  // That delta is the local offset.
+  const asUtc = new Date(padded + 'Z')
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  })
+    .formatToParts(asUtc)
+    .reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== 'literal') acc[p.type] = p.value
+      return acc
+    }, {})
+  const amsAsUtcMs = Date.UTC(
+    +parts.year,
+    +parts.month - 1,
+    +parts.day,
+    +parts.hour,
+    +parts.minute,
+    +parts.second,
+  )
+  const offsetMs = amsAsUtcMs - asUtc.getTime()
+  return new Date(asUtc.getTime() - offsetMs).toISOString()
+}
+
+// Current Amsterdam wall-clock as a datetime-local string (no seconds).
+export function nowAmsterdamLocalForInput(): string {
+  const now = new Date()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: APP_TIMEZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  })
+    .formatToParts(now)
+    .reduce<Record<string, string>>((acc, p) => {
+      if (p.type !== 'literal') acc[p.type] = p.value
+      return acc
+    }, {})
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`
+}

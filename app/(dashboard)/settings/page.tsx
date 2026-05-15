@@ -17,6 +17,27 @@ interface ExportTokenRow {
   revoked: boolean
 }
 
+interface GoalsRow {
+  primary_goal: string
+  primary_event_date: string | null
+  secondary_goal: string | null
+  secondary_event_date: string | null
+  secondary_kind: string | null
+  notes: string | null
+  updated_at: string
+}
+
+const DEFAULT_GOALS: GoalsRow = {
+  primary_goal: 'marathon',
+  primary_event_date: '2026-11-01',
+  secondary_goal: 'football',
+  secondary_event_date: '2026-08-11',
+  secondary_kind: 'recreational',
+  notes:
+    'Marathon is the only competitive event. Football is recreational; I will not do ball/technique training. Strength is for injury resilience and general athleticism.',
+  updated_at: '',
+}
+
 async function connectStrava() {
   'use server'
   const state = randomBytes(32).toString('hex')
@@ -130,6 +151,47 @@ async function resyncRecent(formData: FormData) {
   redirect(`/settings?resynced=${count}`)
 }
 
+async function saveGoals(formData: FormData) {
+  'use server'
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const dateOrNull = (raw: FormDataEntryValue | null): string | null => {
+    const s = String(raw ?? '').trim()
+    return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null
+  }
+  const trimOrNull = (raw: FormDataEntryValue | null): string | null => {
+    const s = String(raw ?? '').trim()
+    return s === '' ? null : s
+  }
+
+  const primary = String(formData.get('primary_goal') ?? '').trim()
+  if (!primary) redirect('/settings?goals_error=missing_primary')
+
+  const { error } = await supabase.from('goals').upsert(
+    {
+      user_id: user.id,
+      primary_goal: primary,
+      primary_event_date: dateOrNull(formData.get('primary_event_date')),
+      secondary_goal: trimOrNull(formData.get('secondary_goal')),
+      secondary_event_date: dateOrNull(formData.get('secondary_event_date')),
+      secondary_kind: trimOrNull(formData.get('secondary_kind')),
+      notes: trimOrNull(formData.get('notes')),
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'user_id' },
+  )
+
+  if (error) {
+    redirect(`/settings?goals_error=${encodeURIComponent(error.message)}`)
+  }
+  revalidatePath('/settings')
+  redirect('/settings?goals_saved=1')
+}
+
 async function revokeExportToken(formData: FormData) {
   'use server'
   const supabase = await createSupabaseServerClient()
@@ -187,10 +249,28 @@ export default async function SettingsPage({
     .order('created_at', { ascending: false })
     .returns<ExportTokenRow[]>()
 
+  const { data: goalsRow } = await supabase
+    .from('goals')
+    .select(
+      'primary_goal, primary_event_date, secondary_goal, ' +
+        'secondary_event_date, secondary_kind, notes, updated_at',
+    )
+    .eq('user_id', user.id)
+    .maybeSingle<GoalsRow>()
+
+  const goals = goalsRow ?? DEFAULT_GOALS
+  const goalsSaved = sp.goals_saved === '1'
+  const goalsError =
+    typeof sp.goals_error === 'string' ? sp.goals_error : null
+
   const connected = sp.strava === 'connected'
   const disconnected = sp.disconnected === '1'
   const stravaError =
     typeof sp.strava_error === 'string' ? sp.strava_error : null
+  const backfilledCount =
+    typeof sp.backfilled === 'string' ? sp.backfilled : null
+  const backfillError =
+    typeof sp.backfill_error === 'string' ? sp.backfill_error : null
 
   const justCreatedToken = sp.new_token === '1'
   const tokenError =
@@ -211,13 +291,136 @@ export default async function SettingsPage({
 
   const exportUrlBase = process.env.NEXT_PUBLIC_APP_URL ?? ''
 
+  const inputClass =
+    'rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm outline-none focus:border-border-2'
+
   return (
     <div className="space-y-10 max-w-2xl p-6">
       <h1 className="text-2xl font-semibold text-ink">Settings</h1>
 
       <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-ink">Goals</h2>
+        <p className="text-sm text-muted">
+          This block is included in every export. The AI reads it to frame your
+          training. Update it whenever priorities shift.
+        </p>
+        {!goalsRow && (
+          <p className="text-xs text-muted">
+            No row yet — the form below is pre-filled with sensible defaults. Click save to commit them.
+          </p>
+        )}
+
+        <form action={saveGoals} className="space-y-4">
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-1">
+              <label htmlFor="primary_goal" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Primary goal
+              </label>
+              <input
+                id="primary_goal"
+                name="primary_goal"
+                type="text"
+                required
+                defaultValue={goals.primary_goal}
+                className={`${inputClass} w-48`}
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="primary_event_date" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Primary event date
+              </label>
+              <input
+                id="primary_event_date"
+                name="primary_event_date"
+                type="date"
+                defaultValue={goals.primary_event_date ?? ''}
+                className={`${inputClass} w-44`}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-4">
+            <div className="space-y-1">
+              <label htmlFor="secondary_goal" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Secondary goal
+              </label>
+              <input
+                id="secondary_goal"
+                name="secondary_goal"
+                type="text"
+                defaultValue={goals.secondary_goal ?? ''}
+                className={`${inputClass} w-48`}
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="secondary_event_date" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Secondary event date
+              </label>
+              <input
+                id="secondary_event_date"
+                name="secondary_event_date"
+                type="date"
+                defaultValue={goals.secondary_event_date ?? ''}
+                className={`${inputClass} w-44`}
+              />
+            </div>
+            <div className="space-y-1">
+              <label htmlFor="secondary_kind" className="text-xs uppercase tracking-[0.1em] text-muted">
+                Secondary kind
+              </label>
+              <input
+                id="secondary_kind"
+                name="secondary_kind"
+                type="text"
+                placeholder="competitive · recreational · …"
+                defaultValue={goals.secondary_kind ?? ''}
+                className={`${inputClass} w-48`}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label htmlFor="goals_notes" className="text-xs uppercase tracking-[0.1em] text-muted">
+              Notes for the AI
+            </label>
+            <textarea
+              id="goals_notes"
+              name="notes"
+              rows={4}
+              defaultValue={goals.notes ?? ''}
+              className={`${inputClass} w-full py-2`}
+            />
+            <p className="text-xs text-muted">
+              Explain the priority, any constraints, and how to weigh the secondary goal. Plain prose is fine.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              type="submit"
+              className="rounded bg-ink text-bg px-4 py-2 text-sm font-medium hover:opacity-90"
+            >
+              Save goals
+            </button>
+            {goalsSaved && <span className="text-sm text-success">Saved.</span>}
+            {goalsError && <span className="text-sm text-warn">{goalsError}</span>}
+          </div>
+        </form>
+      </section>
+
+      <section className="space-y-3">
         <h2 className="text-lg font-semibold text-ink">Strava</h2>
         {connected && <p className="text-sm text-success">Connected.</p>}
+        {backfilledCount && (
+          <p className="text-sm text-success">
+            Backfilled {backfilledCount} run{backfilledCount === '1' ? '' : 's'} from the last year.
+          </p>
+        )}
+        {backfillError && (
+          <p className="text-sm text-warn">
+            Backfill failed: {backfillError}. Use the resync button below.
+          </p>
+        )}
         {disconnected && (
           <p className="text-sm text-muted">Disconnected.</p>
         )}
