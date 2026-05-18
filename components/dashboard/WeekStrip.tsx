@@ -21,6 +21,9 @@ export interface WeekStripSession {
   description?: SessionDescription | null
   format?: string | null
   notes?: string | null
+  // When a planned run matches a Strava activity, the actuals are attached
+  // here so the popover can show both prescription and result.
+  matched_run?: WeekStripRun | null
 }
 
 export interface SessionDescription {
@@ -170,13 +173,13 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
   })
   const d = s.description ?? null
   if (d?.target_distance_km != null) {
-    out.push({ label: 'Target distance', value: `${d.target_distance_km} km` })
+    out.push({ label: 'Target dist', value: `${d.target_distance_km} km` })
   }
   if (d?.target_duration_min != null) {
-    out.push({ label: 'Target duration', value: `${d.target_duration_min} min` })
+    out.push({ label: 'Target dur', value: `${d.target_duration_min} min` })
   }
   if (s.duration_min != null) {
-    out.push({ label: 'Logged duration', value: `${s.duration_min} min` })
+    out.push({ label: 'Logged dur', value: `${s.duration_min} min` })
   }
   if (d?.target_hr_min != null && d?.target_hr_max != null) {
     out.push({ label: 'Target HR', value: `${d.target_hr_min}–${d.target_hr_max} bpm` })
@@ -194,6 +197,22 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
   if (s.format) out.push({ label: 'Format', value: s.format })
   if (d?.reason) out.push({ label: 'Why', value: d.reason })
   if (s.notes) out.push({ label: 'Notes', value: s.notes })
+  // Append actual run results when this session is a planned-run matched
+  // to a Strava activity, so the popover shows prescription + execution.
+  if (s.matched_run) {
+    const r = s.matched_run
+    const km = r.distance_m / 1000
+    const min = r.moving_time_s / 60
+    const pacePerKm = min / km
+    const pm = Math.floor(pacePerKm)
+    const ps = Math.round((pacePerKm - pm) * 60)
+    out.push({ label: 'Actual dist', value: `${km.toFixed(2)} km` })
+    out.push({
+      label: 'Actual time',
+      value: `${Math.floor(min)} min ${Math.round((min % 1) * 60)} s`,
+    })
+    out.push({ label: 'Actual pace', value: `${pm}:${String(ps).padStart(2, '0')}/km` })
+  }
   return out
 }
 

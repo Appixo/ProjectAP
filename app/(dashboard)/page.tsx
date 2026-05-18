@@ -69,6 +69,7 @@ interface RawSession {
   description: SessionDescription | null
   format: string | null
   notes: string | null
+  matched_activity_id: number | null
 }
 
 interface RawGoals {
@@ -193,7 +194,7 @@ export default async function DashboardPage() {
     supabase
       .from('training_sessions')
       .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
       .gte('session_at', thisWeekStartIso)
       .lt('session_at', nextWeekStartIso)
@@ -202,7 +203,7 @@ export default async function DashboardPage() {
     supabase
       .from('training_sessions')
       .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
       .gte('session_at', lastWeekStartIso)
       .lt('session_at', thisWeekStartIso)
@@ -211,7 +212,7 @@ export default async function DashboardPage() {
     supabase
       .from('training_sessions')
       .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
       .gte('session_at', nextWeekStartIso)
       .lt('session_at', upcomingHorizonIso)
@@ -410,26 +411,51 @@ export default async function DashboardPage() {
       notes: s.notes,
     }))
 
-  const stripRuns: WeekStripRun[] = thisWeekRuns.map(r => ({
-    id: r.id,
-    start_at: r.start_at,
-    distance_m: r.distance_m,
-    moving_time_s: r.moving_time_s,
-    runType: r.runType,
-  }))
+  // Dedup planned-run matches: when a session has matched_activity_id set,
+  // hide that activity from the runs strip (the session already represents
+  // it) and attach the run's actuals to the session for the popover.
+  const matchedActivityIds = new Set(
+    thisWeekSessions
+      .filter(s => s.matched_activity_id != null)
+      .map(s => s.matched_activity_id as number),
+  )
+  const runById = new Map(thisWeekRuns.map(r => [r.id, r]))
+
+  const stripRuns: WeekStripRun[] = thisWeekRuns
+    .filter(r => !matchedActivityIds.has(r.id))
+    .map(r => ({
+      id: r.id,
+      start_at: r.start_at,
+      distance_m: r.distance_m,
+      moving_time_s: r.moving_time_s,
+      runType: r.runType,
+    }))
   const stripSessions: WeekStripSession[] = thisWeekSessions
     .filter(s => (s.status ?? 'completed') !== 'skipped')
-    .map(s => ({
-      id: s.id,
-      session_at_local: s.session_at_local,
-      modality: s.modality,
-      duration_min: s.duration_min,
-      rpe: s.rpe,
-      status: s.status,
-      description: s.description,
-      format: s.format,
-      notes: s.notes,
-    }))
+    .map(s => {
+      const matched =
+        s.matched_activity_id != null ? runById.get(s.matched_activity_id) : undefined
+      return {
+        id: s.id,
+        session_at_local: s.session_at_local,
+        modality: s.modality,
+        duration_min: s.duration_min,
+        rpe: s.rpe,
+        status: s.status,
+        description: s.description,
+        format: s.format,
+        notes: s.notes,
+        matched_run: matched
+          ? {
+              id: matched.id,
+              start_at: matched.start_at,
+              distance_m: matched.distance_m,
+              moving_time_s: matched.moving_time_s,
+              runType: matched.runType,
+            }
+          : null,
+      }
+    })
 
   const reviewSessions: WeekReviewSession[] = lastWeekSessions.map(s => ({
     id: s.id,
