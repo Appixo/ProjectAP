@@ -16,6 +16,8 @@ import {
   type SessionDescription,
 } from '@/components/dashboard/WeekStrip'
 import { UpcomingWeeks } from '@/components/dashboard/UpcomingWeeks'
+import { PersonalBests } from '@/components/dashboard/PersonalBests'
+import { bestEfforts } from '@/lib/run/best_efforts'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
 import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
@@ -139,6 +141,7 @@ export default async function DashboardPage() {
 
   const [
     { data: rawActivities },
+    { data: allTimeRuns },
     { data: sleepLogs },
     { data: lastWeekLogs },
     { data: thisWeekSessionsRaw },
@@ -155,6 +158,23 @@ export default async function DashboardPage() {
       .gte('start_at', sinceIso)
       .order('start_at', { ascending: true })
       .returns<RawActivity[]>(),
+    // Separate query: all-time runs for personal bests. Only the fields the
+    // bestEfforts() function needs; small payload even with many years.
+    supabase
+      .from('activities')
+      .select('id, start_at, distance_m, moving_time_s, type, source')
+      .eq('type', 'Run')
+      .order('start_at', { ascending: false })
+      .returns<
+        {
+          id: number
+          start_at: string
+          distance_m: number
+          moving_time_s: number
+          type: string
+          source: string | null
+        }[]
+      >(),
     supabase
       .from('daily_log')
       .select('log_date, sleep_hours')
@@ -358,6 +378,24 @@ export default async function DashboardPage() {
 
   const thisWeekSessions = thisWeekSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
+
+  // Personal bests computed across all-time runs. bestEfforts() accepts the
+  // ActivityForDerived shape; we only need id/start_at/distance_m/moving_time_s
+  // /type/source — fill the remaining fields with safe defaults.
+  const personalBests = bestEfforts(
+    (allTimeRuns ?? []).map(a => ({
+      id: a.id,
+      start_at: a.start_at,
+      distance_m: a.distance_m,
+      moving_time_s: a.moving_time_s,
+      type: a.type,
+      has_heartrate: false,
+      average_heartrate: null,
+      max_heartrate: null,
+      average_speed_mps: null,
+      source: a.source,
+    })),
+  )
   const upcomingSessions: WeekStripSession[] = (upcomingSessionsRaw ?? [])
     .filter(s => (s.status ?? 'completed') !== 'skipped')
     .map(s => ({
@@ -423,6 +461,9 @@ export default async function DashboardPage() {
         <DailyLogCard />
         <SessionLogPicker todayYmd={todayYmd} />
       </section>
+
+      {/* personal bests across all time */}
+      <PersonalBests best={personalBests} />
 
       {/* this week — cross-modal day grid */}
       <WeekStrip

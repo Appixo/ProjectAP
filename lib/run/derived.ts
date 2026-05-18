@@ -7,6 +7,7 @@
 
 import { classifyRuns, type RunInput } from './classify'
 import { ymdInAmsterdam } from '@/lib/time/week'
+import { bestEfforts, type BestEfforts } from './best_efforts'
 
 // Anatomically plausible cap when filtering max_heartrate samples for the
 // "personal max" estimate. Strava + watch sensors regularly spike to 200s
@@ -33,6 +34,9 @@ const FRAGMENT_MAX_GAP_S = 3 * 3600
 const FRAGMENT_MAX_DISTANCE_M = 10000
 
 export interface ActivityForDerived {
+  // id is optional so callers that only need aggregate stats (e.g. ACWR)
+  // don't have to plumb it through; best_efforts uses it when present.
+  id?: number
   start_at: string
   distance_m: number
   moving_time_s: number
@@ -63,6 +67,7 @@ export interface DerivedMetrics {
     moving_time_s: number
   } | null
   days_to_primary_race: number | null
+  best_efforts: BestEfforts
 }
 
 function mondayUtcYmd(d: Date): string {
@@ -308,6 +313,11 @@ export function deriveMetrics(
     riegel_predicted_marathon_s: predicted,
     riegel_basis: riegelBasis,
     days_to_primary_race: dtr,
+    // Best efforts use the *raw* runs (not fragment-filtered) on purpose:
+    // a 5K race that was logged as a Strava activity is its own row and
+    // shouldn't be dropped by fragment heuristics. Source='inferred' is
+    // still excluded.
+    best_efforts: bestEfforts(rawRuns),
   }
 }
 

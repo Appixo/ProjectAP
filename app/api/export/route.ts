@@ -267,6 +267,17 @@ const SCHEMA = {
       optional: true,
     },
     days_to_primary_race: { type: 'integer' },
+    best_efforts: {
+      type: 'object',
+      shape: {
+        d_5k:
+          'object | null — { time_s, date (YYYY-MM-DD Amsterdam), activity_id, distance_m, pace_s_per_km }',
+        d_10k: 'same shape as d_5k, distance >= 10000 m',
+        d_half: 'same shape as d_5k, distance >= 21097.5 m',
+        d_full: 'same shape as d_5k, distance >= 42195 m',
+      },
+      note: 'Best moving_time_s for each standard distance, restricted to runs whose recorded distance falls in [target, target × 1.10]. Pure best-effort lookup over all runs (excludes source=inferred). Null when no qualifying activity exists.',
+    },
   },
   notes: {
     inferred_rows:
@@ -366,6 +377,7 @@ export async function GET(request: NextRequest) {
 
   const derived = deriveMetrics(
     (activities ?? []).map(a => ({
+      id: a.id,
       start_at: a.start_at,
       distance_m: a.distance_m,
       moving_time_s: a.moving_time_s,
