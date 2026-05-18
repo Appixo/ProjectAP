@@ -114,14 +114,49 @@ const SCHEMA = {
         'cycling',
         'swimming',
         'mobility',
+        'run_easy',
+        'run_tempo',
+        'run_long',
+        'run_threshold',
+        'run_vo2',
+        'run_race',
+        'run_recovery',
+        'rest',
         'other',
       ],
+      note: "Planned runs live here as run_* modalities; the actual Strava activity (when synced) sits in `activities` and is linked back via matched_activity_id.",
     },
     duration_min: { type: 'integer', range: '1-600', optional: true },
     rpe: { type: 'integer', range: '1-10', optional: true },
     format: { type: 'string', max_length: 80, optional: true },
     notes: { type: 'string', max_length: 4000, optional: true },
     source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'logged' },
+    status: {
+      type: 'enum',
+      values: ['planned', 'completed', 'skipped'],
+      default: 'completed',
+      note: "Planned workouts ahead of today are 'planned'; past workouts are 'completed' or 'skipped'.",
+    },
+    description: {
+      type: 'object',
+      shape: {
+        target_distance_km: 'number',
+        target_duration_min: 'integer 1-600',
+        target_hr_min: 'integer 60-220',
+        target_hr_max: 'integer 60-220',
+        target_pace_s_per_km_min: 'integer 120-900 (seconds per km, lower bound = faster)',
+        target_pace_s_per_km_max: 'integer 120-900',
+        reason: 'string up to 500 chars — one-line rationale',
+      },
+      optional: true,
+      note: 'Plan metadata. Set on planned workouts so the dashboard tooltip + AI coach reading the export both see the prescription.',
+    },
+    matched_activity_id: {
+      type: 'integer',
+      references: 'activities.id',
+      optional: true,
+      note: 'For completed planned runs: links to the Strava activity that fulfilled the plan. Set by the webhook handler when a same-day matching run syncs.',
+    },
   },
   daily_logs: {
     log_date: { type: 'string', format: 'YYYY-MM-DD' },
@@ -284,7 +319,8 @@ export async function GET(request: NextRequest) {
       .from('training_sessions')
       .select(
         'id, session_at, session_at_local, timezone, modality, ' +
-          'duration_min, rpe, format, notes, source',
+          'duration_min, rpe, format, notes, source, status, description, ' +
+          'matched_activity_id',
       )
       .eq('user_id', auth.userId)
       .order('session_at', { ascending: false }),
@@ -398,17 +434,22 @@ export async function GET(request: NextRequest) {
         url_pattern: urlPatternFor('/api/sessions'),
         method: 'POST',
         content_type: 'application/json',
+        accepts: 'single object OR array of objects (up to 100) — use the array form to upload a whole training plan at once',
         body_schema: {
           session_at_local:
             'string, YYYY-MM-DDTHH:MM in Europe/Amsterdam local time (required)',
           modality:
-            'string, one of: strength_upper, strength_lower, strength_full, football, cycling, swimming, mobility, other (required)',
+            'string, one of: strength_upper, strength_lower, strength_full, football, cycling, swimming, mobility, run_easy, run_tempo, run_long, run_threshold, run_vo2, run_race, run_recovery, rest, other (required)',
           duration_min: 'integer 1-600 (optional)',
           rpe: 'integer 1-10 (optional)',
           format: 'string up to 80 chars (optional)',
           notes: 'string up to 4000 chars (optional)',
+          status:
+            "string, one of: planned, completed, skipped (optional, default 'completed'). Use 'planned' for future plan rows.",
+          description:
+            'object (optional) — { target_distance_km, target_duration_min, target_hr_min, target_hr_max, target_pace_s_per_km_min, target_pace_s_per_km_max, reason }. See context.schema.training_sessions.description for full spec.',
         },
-        example_body: {
+        example_body_single: {
           session_at_local: `${today}T18:30`,
           modality: 'football',
           duration_min: 50,
@@ -416,8 +457,23 @@ export async function GET(request: NextRequest) {
           format: '6v6 2x25min',
           notes: 'Felt sharp in first half.',
         },
+        example_body_batch_planned: [
+          {
+            session_at_local: `${today}T18:00`,
+            modality: 'run_tempo',
+            status: 'planned',
+            description: {
+              target_distance_km: 8,
+              target_hr_min: 152,
+              target_hr_max: 158,
+              target_pace_s_per_km_min: 285,
+              target_pace_s_per_km_max: 300,
+              reason: 'First threshold stimulus in 5 weeks. 2 WU + 4 tempo + 2 CD.',
+            },
+          },
+        ],
         notes: auth.canWrite
-          ? 'POST a JSON body matching body_schema to add a training session.'
+          ? "POST a JSON body matching body_schema. Send a single object for one session, or an array (max 100) to upload a planned block. Existing rows are not updated by POST — to revise a planned workout, hit the /log UI or (future) PATCH endpoint."
           : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
       },
       daily_logs: {
