@@ -7,7 +7,7 @@
 
 import { classifyRuns, type RunInput } from './classify'
 import { ymdInAmsterdam } from '@/lib/time/week'
-import { bestEfforts, type BestEfforts } from './best_efforts'
+import { bestEfforts, type BestEfforts, type ManualPersonalBest } from './best_efforts'
 
 // Anatomically plausible cap when filtering max_heartrate samples for the
 // "personal max" estimate. Strava + watch sensors regularly spike to 200s
@@ -152,6 +152,7 @@ export function deriveMetrics(
   activities: ActivityForDerived[],
   now: Date,
   primaryEventDate: string | null,
+  manualPersonalBests: ManualPersonalBest[] = [],
 ): DerivedMetrics {
   const rawRuns = activities.filter(
     a => a.type === 'Run' && (a.source ?? 'synced') !== 'inferred',
@@ -316,8 +317,9 @@ export function deriveMetrics(
     // Best efforts use the *raw* runs (not fragment-filtered) on purpose:
     // a 5K race that was logged as a Strava activity is its own row and
     // shouldn't be dropped by fragment heuristics. Source='inferred' is
-    // still excluded.
-    best_efforts: bestEfforts(rawRuns),
+    // still excluded. Manual entries from the personal_bests table are
+    // merged in — faster of (derived, manual) wins per distance bucket.
+    best_efforts: bestEfforts(rawRuns, manualPersonalBests),
   }
 }
 

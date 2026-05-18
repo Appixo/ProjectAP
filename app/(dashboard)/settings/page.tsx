@@ -28,6 +28,16 @@ interface GoalsRow {
   updated_at: string
 }
 
+interface PersonalBestRow {
+  id: string
+  distance_m: number
+  time_s: number
+  achieved_at: string
+  event_name: string | null
+  notes: string | null
+  source: 'logged' | 'derived' | 'synced'
+}
+
 const DEFAULT_GOALS: GoalsRow = {
   primary_goal: 'marathon',
   primary_event_date: '2026-11-01',
@@ -195,6 +205,66 @@ async function saveGoals(formData: FormData) {
   redirect('/settings?goals_saved=1')
 }
 
+async function addPersonalBest(formData: FormData) {
+  'use server'
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+
+  const distance = Number(formData.get('distance_m'))
+  const hours = Number(formData.get('time_h') || 0)
+  const minutes = Number(formData.get('time_m') || 0)
+  const seconds = Number(formData.get('time_s') || 0)
+  const totalSeconds = Math.floor(hours * 3600 + minutes * 60 + seconds)
+  const achievedAt = String(formData.get('achieved_at') ?? '').trim()
+  const eventName = String(formData.get('event_name') ?? '').trim() || null
+  const notes = String(formData.get('notes') ?? '').trim() || null
+
+  if (!Number.isFinite(distance) || distance <= 0) {
+    redirect('/settings?pb_error=invalid_distance')
+  }
+  if (totalSeconds <= 0) {
+    redirect('/settings?pb_error=invalid_time')
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(achievedAt)) {
+    redirect('/settings?pb_error=invalid_date')
+  }
+
+  const { error } = await supabase.from('personal_bests').insert({
+    user_id: user.id,
+    distance_m: distance,
+    time_s: totalSeconds,
+    achieved_at: achievedAt,
+    event_name: eventName,
+    notes,
+    source: 'logged',
+  })
+
+  if (error) {
+    redirect(`/settings?pb_error=${encodeURIComponent(error.message)}`)
+  }
+  revalidatePath('/settings')
+  revalidatePath('/')
+  redirect('/settings?pb_saved=1')
+}
+
+async function deletePersonalBest(formData: FormData) {
+  'use server'
+  const supabase = await createSupabaseServerClient()
+  const {
+    data: { user },
+  } = await supabase.auth.getUser()
+  if (!user) redirect('/login')
+  const id = String(formData.get('id') ?? '')
+  if (!id) redirect('/settings')
+  await supabase.from('personal_bests').delete().eq('user_id', user.id).eq('id', id)
+  revalidatePath('/settings')
+  revalidatePath('/')
+  redirect('/settings?pb_deleted=1')
+}
+
 async function revokeExportToken(formData: FormData) {
   'use server'
   const supabase = await createSupabaseServerClient()
@@ -218,6 +288,19 @@ async function revokeExportToken(formData: FormData) {
 
 function shortHash(h: string): string {
   return h.slice(0, 8) + '…'
+}
+
+function formatTimeFromSeconds(seconds: number): string {
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  const s = Math.floor(seconds % 60)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function formatDistance(meters: number): string {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(meters % 1000 === 0 ? 0 : 2)} km`
+  return `${meters} m`
 }
 
 function formatLocal(iso: string | null): string {
@@ -261,6 +344,14 @@ export default async function SettingsPage({
     .eq('user_id', user.id)
     .maybeSingle<GoalsRow>()
 
+  const { data: pbRows } = await supabase
+    .from('personal_bests')
+    .select('id, distance_m, time_s, achieved_at, event_name, notes, source')
+    .eq('user_id', user.id)
+    .order('distance_m', { ascending: true })
+    .order('time_s', { ascending: true })
+    .returns<PersonalBestRow[]>()
+
   const goals = goalsRow ?? DEFAULT_GOALS
   const goalsSaved = sp.goals_saved === '1'
   const goalsError =
@@ -279,6 +370,10 @@ export default async function SettingsPage({
   const tokenError =
     typeof sp.token_error === 'string' ? sp.token_error : null
   const justRevoked = sp.revoked === '1'
+
+  const pbSaved = sp.pb_saved === '1'
+  const pbDeleted = sp.pb_deleted === '1'
+  const pbError = typeof sp.pb_error === 'string' ? sp.pb_error : null
 
   let newTokenValue: string | null = null
   if (justCreatedToken) {
@@ -409,6 +504,138 @@ export default async function SettingsPage({
             {goalsError && <span className="text-sm text-warn">{goalsError}</span>}
           </div>
         </form>
+      </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-ink">Personal bests</h2>
+        <p className="text-sm text-muted">
+          Manual race results. The dashboard auto-derives a best from your Strava activities;
+          rows here override that when faster (use this for races where the watch died, or
+          historical PBs that predate Strava sync). Pick a standard distance or enter a
+          custom one in meters.
+        </p>
+
+        <form action={addPersonalBest} className="flex flex-wrap items-end gap-3">
+          <div className="space-y-1">
+            <label htmlFor="distance_m" className="text-xs uppercase tracking-[0.1em] text-muted">
+              Distance
+            </label>
+            <select
+              id="distance_m"
+              name="distance_m"
+              required
+              defaultValue="5000"
+              className={`${inputClass} w-40`}
+            >
+              <option value="5000">5K (5000 m)</option>
+              <option value="10000">10K (10000 m)</option>
+              <option value="21097.5">Half (21097.5 m)</option>
+              <option value="42195">Marathon (42195 m)</option>
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs uppercase tracking-[0.1em] text-muted">Time</label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                name="time_h"
+                min={0}
+                max={10}
+                placeholder="h"
+                className={`${inputClass} w-14`}
+              />
+              <span className="text-muted">:</span>
+              <input
+                type="number"
+                name="time_m"
+                min={0}
+                max={59}
+                placeholder="m"
+                className={`${inputClass} w-14`}
+              />
+              <span className="text-muted">:</span>
+              <input
+                type="number"
+                name="time_s"
+                min={0}
+                max={59}
+                placeholder="s"
+                className={`${inputClass} w-14`}
+              />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="achieved_at" className="text-xs uppercase tracking-[0.1em] text-muted">
+              Date
+            </label>
+            <input
+              id="achieved_at"
+              type="date"
+              name="achieved_at"
+              required
+              className={`${inputClass} w-40`}
+            />
+          </div>
+          <div className="space-y-1 flex-1 min-w-[12rem]">
+            <label htmlFor="event_name" className="text-xs uppercase tracking-[0.1em] text-muted">
+              Event (optional)
+            </label>
+            <input
+              id="event_name"
+              type="text"
+              name="event_name"
+              maxLength={120}
+              placeholder="Rotterdam Marathon"
+              className={`${inputClass} w-full`}
+            />
+          </div>
+          <button
+            type="submit"
+            className="rounded bg-ink text-bg px-3 py-2 text-sm font-medium hover:opacity-90"
+          >
+            Add PB
+          </button>
+        </form>
+        {pbSaved && <p className="text-sm text-success">Saved.</p>}
+        {pbDeleted && <p className="text-sm text-muted">Deleted.</p>}
+        {pbError && <p className="text-sm text-warn">{pbError}</p>}
+
+        {pbRows && pbRows.length > 0 && (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm border-collapse">
+              <thead>
+                <tr className="text-left text-muted border-b border-border">
+                  <th className="py-2 pr-4 font-medium">Distance</th>
+                  <th className="py-2 pr-4 font-medium">Time</th>
+                  <th className="py-2 pr-4 font-medium">Date</th>
+                  <th className="py-2 pr-4 font-medium">Event</th>
+                  <th className="py-2 font-medium" />
+                </tr>
+              </thead>
+              <tbody>
+                {pbRows.map(pb => (
+                  <tr key={pb.id} className="border-b border-border text-ink-2">
+                    <td className="py-2 pr-4">{formatDistance(pb.distance_m)}</td>
+                    <td className="py-2 pr-4 font-mono">{formatTimeFromSeconds(pb.time_s)}</td>
+                    <td className="py-2 pr-4 font-mono text-xs">{pb.achieved_at}</td>
+                    <td className="py-2 pr-4">{pb.event_name ?? '—'}</td>
+                    <td className="py-2 text-right">
+                      <form action={deletePersonalBest}>
+                        <input type="hidden" name="id" value={pb.id} />
+                        <button
+                          type="submit"
+                          className="text-xs text-warn hover:underline"
+                        >
+                          Delete
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </section>
 
       <section className="space-y-3">

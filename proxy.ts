@@ -10,6 +10,8 @@ const PUBLIC_PATHS = [
   '/api/sessions',
   '/api/daily-logs',
   '/api/shoes',
+  '/api/personal-bests',
+  '/api/benchmarks',
 ]
 
 function isPublic(path: string): boolean {

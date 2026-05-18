@@ -70,9 +70,19 @@ export function PersonalBests({ best }: PersonalBestsProps) {
                   <div className="font-mono text-[11px] text-ink-2 -tracking-[0.01em]">
                     {formatPace(entry.pace_s_per_km)}
                   </div>
-                  <div className="text-[10px] text-muted mt-0.5">
+                  <div className="text-[10px] text-muted mt-0.5 truncate">
                     {formatDate(entry.date)} · {(entry.distance_m / 1000).toFixed(2)} km
+                    {entry.source !== 'derived' && (
+                      <span className="ml-1 uppercase tracking-[0.05em]">
+                        · {entry.source}
+                      </span>
+                    )}
                   </div>
+                  {entry.event_name && (
+                    <div className="text-[10px] text-muted mt-0.5 truncate">
+                      {entry.event_name}
+                    </div>
+                  )}
                 </>
               ) : (
                 <>

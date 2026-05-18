@@ -17,7 +17,7 @@ import {
 } from '@/components/dashboard/WeekStrip'
 import { UpcomingWeeks } from '@/components/dashboard/UpcomingWeeks'
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
-import { bestEfforts } from '@/lib/run/best_efforts'
+import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
 import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
@@ -143,6 +143,7 @@ export default async function DashboardPage() {
   const [
     { data: rawActivities },
     { data: allTimeRuns },
+    { data: manualPbs },
     { data: sleepLogs },
     { data: lastWeekLogs },
     { data: thisWeekSessionsRaw },
@@ -174,6 +175,23 @@ export default async function DashboardPage() {
           moving_time_s: number
           type: string
           source: string | null
+        }[]
+      >(),
+    // Manual personal-best entries (race results etc.). Merged with the
+    // derived bests so the faster of the two wins per distance bucket.
+    supabase
+      .from('personal_bests')
+      .select('distance_m, time_s, achieved_at, activity_id, source, event_name')
+      .order('distance_m', { ascending: true })
+      .order('time_s', { ascending: true })
+      .returns<
+        {
+          distance_m: number
+          time_s: number
+          achieved_at: string
+          activity_id: number | null
+          source: 'logged' | 'derived' | 'synced'
+          event_name: string | null
         }[]
       >(),
     supabase
@@ -383,6 +401,14 @@ export default async function DashboardPage() {
   // Personal bests computed across all-time runs. bestEfforts() accepts the
   // ActivityForDerived shape; we only need id/start_at/distance_m/moving_time_s
   // /type/source — fill the remaining fields with safe defaults.
+  const manualPbList: ManualPersonalBest[] = (manualPbs ?? []).map(m => ({
+    distance_m: m.distance_m,
+    time_s: m.time_s,
+    achieved_at: m.achieved_at,
+    activity_id: m.activity_id,
+    source: m.source,
+    event_name: m.event_name,
+  }))
   const personalBests = bestEfforts(
     (allTimeRuns ?? []).map(a => ({
       id: a.id,
@@ -396,6 +422,7 @@ export default async function DashboardPage() {
       average_speed_mps: null,
       source: a.source,
     })),
+    manualPbList,
   )
   const upcomingSessions: WeekStripSession[] = (upcomingSessionsRaw ?? [])
     .filter(s => (s.status ?? 'completed') !== 'skipped')

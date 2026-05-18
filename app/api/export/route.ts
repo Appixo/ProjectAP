@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { resolveApiAuth, touchTokenLastUsed } from '@/lib/auth/api-auth'
 import { todayInAmsterdam } from '@/lib/time/week'
 import { deriveMetrics, type ActivityForDerived } from '@/lib/run/derived'
+import type { ManualPersonalBest } from '@/lib/run/best_efforts'
 
 const SHOE_HIGH_KM_FLAG = 600
 
@@ -196,6 +197,16 @@ const SCHEMA = {
     habit_in_bed_on_time: { type: 'boolean', optional: true, note: 'legacy field' },
     source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'logged' },
   },
+  personal_bests: {
+    id: { type: 'uuid' },
+    distance_m: { type: 'number', unit: 'meters' },
+    time_s: { type: 'integer', unit: 'seconds' },
+    achieved_at: { type: 'string', format: 'YYYY-MM-DD' },
+    event_name: { type: 'string', max_length: 120, optional: true },
+    activity_id: { type: 'integer', references: 'activities.id', optional: true },
+    source: { type: 'enum', values: ['logged', 'derived', 'synced'], default: 'logged' },
+    notes: { type: 'string', max_length: 2000, optional: true },
+  },
   shoes: {
     id: { type: 'uuid' },
     brand: { type: 'string', optional: true },
@@ -271,12 +282,12 @@ const SCHEMA = {
       type: 'object',
       shape: {
         d_5k:
-          'object | null — { time_s, date (YYYY-MM-DD Amsterdam), activity_id, distance_m, pace_s_per_km }',
+          'object | null — { time_s, date (YYYY-MM-DD Amsterdam), activity_id, distance_m, pace_s_per_km, source ("derived"|"logged"|"synced"), event_name? }',
         d_10k: 'same shape as d_5k, distance >= 10000 m',
         d_half: 'same shape as d_5k, distance >= 21097.5 m',
         d_full: 'same shape as d_5k, distance >= 42195 m',
       },
-      note: 'Best moving_time_s for each standard distance, restricted to runs whose recorded distance falls in [target, target × 1.10]. Pure best-effort lookup over all runs (excludes source=inferred). Null when no qualifying activity exists.',
+      note: 'Best moving_time_s for each standard distance. Derived entries: runs from the activities array whose distance falls in [target, target × 1.10]. Manual entries from the top-level personal_bests array: distance within ±5% of the target. When both exist, the faster wins.',
     },
   },
   notes: {
@@ -302,6 +313,7 @@ export async function GET(request: NextRequest) {
     { data: trainingSessions },
     { data: goalsRow },
     { data: shoes },
+    { data: pbs },
     { data: user },
   ] = await Promise.all([
     admin
@@ -351,6 +363,28 @@ export async function GET(request: NextRequest) {
       .eq('user_id', auth.userId)
       .order('created_at', { ascending: false })
       .returns<ShoeRow[]>(),
+    admin
+      .from('personal_bests')
+      .select(
+        'id, distance_m, time_s, achieved_at, event_name, activity_id, source, notes, created_at, updated_at',
+      )
+      .eq('user_id', auth.userId)
+      .order('distance_m', { ascending: true })
+      .order('time_s', { ascending: true })
+      .returns<
+        {
+          id: string
+          distance_m: number
+          time_s: number
+          achieved_at: string
+          event_name: string | null
+          activity_id: number | null
+          source: 'logged' | 'derived' | 'synced'
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }[]
+      >(),
     admin.auth.admin.getUserById(auth.userId),
   ])
 
@@ -375,6 +409,14 @@ export async function GET(request: NextRequest) {
   })
   const anyShoeOverThreshold = shoesEnriched.some(s => s.over_threshold_km)
 
+  const manualPbList: ManualPersonalBest[] = (pbs ?? []).map(p => ({
+    distance_m: p.distance_m,
+    time_s: p.time_s,
+    achieved_at: p.achieved_at,
+    activity_id: p.activity_id,
+    source: p.source,
+    event_name: p.event_name,
+  }))
   const derived = deriveMetrics(
     (activities ?? []).map(a => ({
       id: a.id,
@@ -390,6 +432,7 @@ export async function GET(request: NextRequest) {
     })),
     now,
     goalsRow?.primary_event_date ?? null,
+    manualPbList,
   )
 
   // Build per-endpoint write URLs (only meaningful when caller has scope).
@@ -547,6 +590,30 @@ export async function GET(request: NextRequest) {
           ? 'POST adds a shoe. GET /api/shoes lists shoes with computed current_km.'
           : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
       },
+      personal_bests: {
+        url: writeUrlFor('/api/personal-bests'),
+        url_pattern: urlPatternFor('/api/personal-bests'),
+        method: 'POST',
+        content_type: 'application/json',
+        body_schema: {
+          distance_m: 'number > 0 (meters; use 5000, 10000, 21097.5, 42195 for standard distances)',
+          time_s: 'integer > 0 (seconds)',
+          achieved_at: 'string YYYY-MM-DD',
+          event_name: 'string up to 120 chars (optional, e.g. "Rotterdam Marathon 2026")',
+          activity_id: 'integer (optional) — link to a Strava activity in the activities array',
+          notes: 'string up to 2000 chars (optional)',
+        },
+        example_body: {
+          distance_m: 42195,
+          time_s: 11839,
+          achieved_at: '2026-04-12',
+          event_name: 'Rotterdam Marathon',
+          notes: 'watch died at 34 km; official chip time',
+        },
+        notes: auth.canWrite
+          ? "POST adds a manual PB row (source='logged'). Faster of derived vs logged wins per distance bucket in context.derived.best_efforts."
+          : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
+      },
     },
   }
 
@@ -559,6 +626,7 @@ export async function GET(request: NextRequest) {
       training_sessions: trainingSessions ?? [],
       daily_logs: dailyLogs ?? [],
       shoes: shoesEnriched,
+      personal_bests: pbs ?? [],
     },
     { headers: { 'Cache-Control': 'no-store' } },
   )
