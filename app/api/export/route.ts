@@ -2,6 +2,9 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { resolveApiAuth, touchTokenLastUsed } from '@/lib/auth/api-auth'
 import { todayInAmsterdam } from '@/lib/time/week'
+import { deriveMetrics, type ActivityForDerived } from '@/lib/run/derived'
+
+const SHOE_HIGH_KM_FLAG = 600
 
 function notFound() {
   return new NextResponse('Not found', { status: 404 })
@@ -17,6 +20,32 @@ interface GoalsRow {
   updated_at: string
 }
 
+interface ShoeRow {
+  id: string
+  brand: string | null
+  model: string | null
+  purchase_date: string | null
+  retire_at_km: number
+  retired_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+interface ActivityRow extends ActivityForDerived {
+  id: number
+  start_at_local: string
+  timezone: string | null
+  name: string
+  elapsed_time_s: number
+  total_elevation_gain_m: number | null
+  max_speed_mps: number | null
+  rpe_1_10: number | null
+  weather: unknown
+  shoe_id: string | null
+  surface: string | null
+  run_type: string | null
+}
+
 function daysBetween(fromYmd: string, toYmd: string | null): number | null {
   if (!toYmd) return null
   const [fy, fm, fd] = fromYmd.split('-').map(Number)
@@ -25,6 +54,154 @@ function daysBetween(fromYmd: string, toYmd: string | null): number | null {
   const toMs = Date.UTC(ty, tm - 1, td)
   return Math.round((toMs - fromMs) / 86400000)
 }
+
+// Field-level descriptor used in context.schema. Keeps unit and range
+// explicit so an AI reader doesn't have to guess (e.g. distance_m is metres,
+// not km).
+const SCHEMA = {
+  activities: {
+    id: { type: 'integer', source: 'Strava activity id' },
+    start_at: { type: 'string', format: 'ISO 8601 UTC' },
+    start_at_local: { type: 'string', format: 'YYYY-MM-DDTHH:MM:SS (local wall clock)' },
+    timezone: { type: 'string', example: 'Europe/Amsterdam' },
+    name: { type: 'string' },
+    type: { type: 'string', note: 'Strava type, e.g. Run, Ride' },
+    distance_m: { type: 'number', unit: 'meters' },
+    moving_time_s: { type: 'integer', unit: 'seconds' },
+    elapsed_time_s: { type: 'integer', unit: 'seconds' },
+    total_elevation_gain_m: { type: 'number', unit: 'meters' },
+    average_heartrate: { type: 'number', unit: 'bpm' },
+    max_heartrate: { type: 'number', unit: 'bpm' },
+    average_speed_mps: { type: 'number', unit: 'm/s' },
+    max_speed_mps: { type: 'number', unit: 'm/s' },
+    has_heartrate: { type: 'boolean' },
+    rpe_1_10: { type: 'integer', range: '1-10', optional: true },
+    weather: {
+      type: 'object',
+      shape: { temp_c: 'number', humidity_pct: 'number', wind_kph: 'number' },
+      optional: true,
+    },
+    shoe_id: { type: 'uuid', references: 'shoes.id', optional: true },
+    surface: { type: 'enum', values: ['road', 'trail', 'track', 'treadmill'], optional: true },
+    run_type: {
+      type: 'enum',
+      values: ['easy', 'long', 'tempo', 'threshold', 'vo2', 'race', 'recovery'],
+      optional: true,
+    },
+    source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'synced' },
+  },
+  training_sessions: {
+    id: { type: 'uuid' },
+    session_at: { type: 'string', format: 'ISO 8601 UTC' },
+    session_at_local: { type: 'string', format: 'YYYY-MM-DDTHH:MM:SS (local wall clock)' },
+    timezone: { type: 'string' },
+    modality: {
+      type: 'enum',
+      values: [
+        'strength_upper',
+        'strength_lower',
+        'strength_full',
+        'football',
+        'cycling',
+        'swimming',
+        'mobility',
+        'other',
+      ],
+    },
+    duration_min: { type: 'integer', range: '1-600', optional: true },
+    rpe: { type: 'integer', range: '1-10', optional: true },
+    format: { type: 'string', max_length: 80, optional: true },
+    notes: { type: 'string', max_length: 4000, optional: true },
+    source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'logged' },
+  },
+  daily_logs: {
+    log_date: { type: 'string', format: 'YYYY-MM-DD' },
+    sleep_hours: { type: 'number', unit: 'hours', range: '0-24', optional: true },
+    sleep_quality_1_5: { type: 'integer', range: '1-5', optional: true },
+    bedtime: { type: 'string', format: 'HH:MM[:SS] (local)', optional: true },
+    wake_time: { type: 'string', format: 'HH:MM[:SS] (local)', optional: true },
+    morning_rhr_bpm: { type: 'integer', unit: 'bpm', range: '20-200', optional: true },
+    hrv_ms: { type: 'integer', unit: 'ms', range: '1-500', optional: true },
+    soreness: {
+      type: 'array',
+      shape: { area: 'string', score_1_5: 'integer 1-5' },
+      optional: true,
+    },
+    water_l: { type: 'number', unit: 'litres', range: '0-20', optional: true },
+    caffeine_mg: { type: 'integer', unit: 'mg', range: '0-2000', optional: true },
+    caffeine_last_at: { type: 'string', format: 'ISO 8601 UTC', optional: true },
+    alcohol_units: { type: 'number', range: '0-50', optional: true },
+    body_weight_kg: { type: 'number', unit: 'kg', range: '20-250', optional: true },
+    mood_1_5: { type: 'integer', range: '1-5', optional: true },
+    stress_1_5: { type: 'integer', range: '1-5', optional: true },
+    notes: { type: 'string', optional: true },
+    sleep_score: {
+      type: 'integer',
+      range: '0-100',
+      optional: true,
+      note: 'legacy field — Samsung Health sleep score',
+    },
+    energy: { type: 'integer', range: '1-5', optional: true, note: 'legacy field' },
+    habit_strength_done: { type: 'boolean', optional: true, note: 'legacy field' },
+    habit_no_alcohol: { type: 'boolean', optional: true, note: 'legacy field' },
+    habit_in_bed_on_time: { type: 'boolean', optional: true, note: 'legacy field' },
+    source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'logged' },
+  },
+  shoes: {
+    id: { type: 'uuid' },
+    brand: { type: 'string', optional: true },
+    model: { type: 'string', optional: true },
+    purchase_date: { type: 'string', format: 'YYYY-MM-DD', optional: true },
+    retire_at_km: { type: 'number', unit: 'km', default: 700 },
+    retired_at: { type: 'string', format: 'ISO 8601 UTC', optional: true },
+    current_km: {
+      type: 'number',
+      unit: 'km',
+      note: 'computed: sum of activities.distance_m for this shoe / 1000',
+    },
+    over_threshold_km: {
+      type: 'boolean',
+      note: `true when current_km > ${SHOE_HIGH_KM_FLAG}`,
+    },
+    over_retire_km: { type: 'boolean', note: 'true when current_km > retire_at_km' },
+  },
+  derived: {
+    weekly_km_7d: { type: 'number', unit: 'km' },
+    weekly_km_28d: { type: 'number', unit: 'km' },
+    acwr_7_28: {
+      type: 'number',
+      note: 'acute:chronic workload ratio (km last 7d / (km last 28d / 4)). 0.8-1.3 typical "safe" band.',
+    },
+    easy_hard_split_28d_pct: {
+      type: 'object',
+      shape: {
+        easy: 'number (pct of moving_time_s, last 28d)',
+        hard: 'number (pct of moving_time_s, last 28d)',
+        basis: 'enum: hr (>=5 runs with HR, threshold 75% of personal max) | pace (heuristic classifier)',
+      },
+    },
+    longest_run_per_week_km: {
+      type: 'array',
+      shape: { week_start: 'YYYY-MM-DD (Mon UTC)', km: 'number' },
+      note: 'last 12 weeks',
+    },
+    riegel_predicted_marathon_s: {
+      type: 'integer',
+      unit: 'seconds',
+      note: 'Riegel formula T2 = T1 * (D2/D1)^1.06, applied to fastest pace among recent runs >= 5 km in last 90 days',
+    },
+    riegel_basis: {
+      type: 'object',
+      shape: { activity_start_at: 'ISO 8601', distance_m: 'number', moving_time_s: 'integer' },
+      optional: true,
+    },
+    days_to_primary_race: { type: 'integer' },
+  },
+  notes: {
+    inferred_rows:
+      "Rows with source='inferred' are speculative (e.g. system-filled) and are excluded from context.derived metrics until promoted to source='logged'.",
+  },
+} as const
 
 export async function GET(request: NextRequest) {
   const auth = await resolveApiAuth(request)
@@ -40,6 +217,7 @@ export async function GET(request: NextRequest) {
     { data: dailyLogs },
     { data: trainingSessions },
     { data: goalsRow },
+    { data: shoes },
     { data: user },
   ] = await Promise.all([
     admin
@@ -48,15 +226,19 @@ export async function GET(request: NextRequest) {
         'id, start_at, start_at_local, timezone, name, type, distance_m, ' +
           'moving_time_s, elapsed_time_s, total_elevation_gain_m, ' +
           'average_heartrate, max_heartrate, average_speed_mps, max_speed_mps, ' +
-          'has_heartrate',
+          'has_heartrate, rpe_1_10, weather, shoe_id, surface, run_type, source',
       )
       .eq('user_id', auth.userId)
-      .order('start_at', { ascending: false }),
+      .order('start_at', { ascending: false })
+      .returns<ActivityRow[]>(),
     admin
       .from('daily_log')
       .select(
-        'log_date, sleep_hours, sleep_score, energy, ' +
-          'habit_strength_done, habit_no_alcohol, habit_in_bed_on_time, notes',
+        'log_date, sleep_hours, sleep_quality_1_5, bedtime, wake_time, ' +
+          'morning_rhr_bpm, hrv_ms, soreness, water_l, caffeine_mg, ' +
+          'caffeine_last_at, alcohol_units, body_weight_kg, mood_1_5, ' +
+          'stress_1_5, notes, sleep_score, energy, habit_strength_done, ' +
+          'habit_no_alcohol, habit_in_bed_on_time, source',
       )
       .eq('user_id', auth.userId)
       .order('log_date', { ascending: false }),
@@ -64,7 +246,7 @@ export async function GET(request: NextRequest) {
       .from('training_sessions')
       .select(
         'id, session_at, session_at_local, timezone, modality, ' +
-          'duration_min, rpe, format, notes',
+          'duration_min, rpe, format, notes, source',
       )
       .eq('user_id', auth.userId)
       .order('session_at', { ascending: false }),
@@ -76,20 +258,70 @@ export async function GET(request: NextRequest) {
       )
       .eq('user_id', auth.userId)
       .maybeSingle<GoalsRow>(),
+    admin
+      .from('shoes')
+      .select(
+        'id, brand, model, purchase_date, retire_at_km, retired_at, created_at, updated_at',
+      )
+      .eq('user_id', auth.userId)
+      .order('created_at', { ascending: false })
+      .returns<ShoeRow[]>(),
     admin.auth.admin.getUserById(auth.userId),
   ])
 
   const today = todayInAmsterdam()
+  const now = new Date()
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? new URL(request.url).origin
 
-  // The writable session URL. For session-authed callers (logged-in browser),
-  // /api/sessions also accepts the session cookie, so the bare URL works.
-  // For token callers, embed the token only if it has write scope.
-  let writeUrl: string | null = null
-  if (auth.source === 'session' && auth.canWrite) {
-    writeUrl = `${appUrl}/api/sessions`
-  } else if (auth.source === 'token' && auth.canWrite && auth.rawToken) {
-    writeUrl = `${appUrl}/api/sessions?token=${auth.rawToken}`
+  // Per-shoe distance roll-up for the shoes payload + over-threshold flag.
+  const metersByShoe = new Map<string, number>()
+  for (const a of activities ?? []) {
+    if (!a.shoe_id) continue
+    metersByShoe.set(a.shoe_id, (metersByShoe.get(a.shoe_id) ?? 0) + (a.distance_m ?? 0))
+  }
+  const shoesEnriched = (shoes ?? []).map(s => {
+    const km = Number(((metersByShoe.get(s.id) ?? 0) / 1000).toFixed(2))
+    return {
+      ...s,
+      current_km: km,
+      over_threshold_km: km > SHOE_HIGH_KM_FLAG,
+      over_retire_km: km > s.retire_at_km,
+    }
+  })
+  const anyShoeOverThreshold = shoesEnriched.some(s => s.over_threshold_km)
+
+  const derived = deriveMetrics(
+    (activities ?? []).map(a => ({
+      start_at: a.start_at,
+      distance_m: a.distance_m,
+      moving_time_s: a.moving_time_s,
+      type: a.type,
+      has_heartrate: a.has_heartrate,
+      average_heartrate: a.average_heartrate,
+      max_heartrate: a.max_heartrate,
+      average_speed_mps: a.average_speed_mps,
+      source: a.source,
+    })),
+    now,
+    goalsRow?.primary_event_date ?? null,
+  )
+
+  // Build per-endpoint write URLs (only meaningful when caller has scope).
+  // Re-bind to locals so nested closures see the narrowed (non-null) auth.
+  const authSource = auth.source
+  const authCanWrite = auth.canWrite
+  const authRawToken = auth.rawToken
+  function writeUrlFor(path: string): string | null {
+    if (authSource === 'session' && authCanWrite) return `${appUrl}${path}`
+    if (authSource === 'token' && authCanWrite && authRawToken) {
+      return `${appUrl}${path}?token=${authRawToken}`
+    }
+    return null
+  }
+  function urlPatternFor(path: string): string {
+    return authSource === 'session'
+      ? `${appUrl}${path}`
+      : `${appUrl}${path}?token=<WRITE_TOKEN>`
   }
 
   const context = {
@@ -117,13 +349,15 @@ export async function GET(request: NextRequest) {
       source: auth.source,
       scope: auth.canWrite ? 'read+write' : 'read',
     },
+    schema: SCHEMA,
+    derived,
+    flags: {
+      shoes_over_600km: anyShoeOverThreshold,
+    },
     write_endpoints: {
       sessions: {
-        url: writeUrl,
-        url_pattern:
-          auth.source === 'session'
-            ? `${appUrl}/api/sessions`
-            : `${appUrl}/api/sessions?token=<WRITE_TOKEN>`,
+        url: writeUrlFor('/api/sessions'),
+        url_pattern: urlPatternFor('/api/sessions'),
         method: 'POST',
         content_type: 'application/json',
         body_schema: {
@@ -148,6 +382,65 @@ export async function GET(request: NextRequest) {
           ? 'POST a JSON body matching body_schema to add a training session.'
           : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
       },
+      daily_logs: {
+        url: writeUrlFor('/api/daily-logs'),
+        url_pattern: urlPatternFor('/api/daily-logs'),
+        method: 'POST',
+        content_type: 'application/json',
+        idempotent_on: 'date (upsert)',
+        body_schema: {
+          date: 'string, YYYY-MM-DD (required)',
+          sleep_hours: 'number 0-24 (optional)',
+          sleep_quality_1_5: 'integer 1-5 (optional)',
+          bedtime: 'string HH:MM[:SS] (optional)',
+          wake_time: 'string HH:MM[:SS] (optional)',
+          morning_rhr_bpm: 'integer 20-200 (optional)',
+          hrv_ms: 'integer 1-500 (optional)',
+          soreness:
+            'array of { area: string<=40 chars, score_1_5: int 1-5 } (optional)',
+          water_l: 'number 0-20 (optional)',
+          caffeine_mg: 'integer 0-2000 (optional)',
+          caffeine_last_at: 'string ISO 8601 UTC (optional)',
+          alcohol_units: 'number 0-50 (optional)',
+          body_weight_kg: 'number 20-250 (optional)',
+          mood_1_5: 'integer 1-5 (optional)',
+          stress_1_5: 'integer 1-5 (optional)',
+          notes: 'string up to 4000 chars (optional)',
+        },
+        example_body: {
+          date: today,
+          sleep_hours: 7.5,
+          sleep_quality_1_5: 4,
+          morning_rhr_bpm: 52,
+          soreness: [{ area: 'calves', score_1_5: 2 }],
+          mood_1_5: 4,
+          notes: 'Solid easy day.',
+        },
+        notes: auth.canWrite
+          ? 'POST upserts the row keyed on (user, date). Only provided fields are written; omitted fields preserve existing values.'
+          : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
+      },
+      shoes: {
+        url: writeUrlFor('/api/shoes'),
+        url_pattern: urlPatternFor('/api/shoes'),
+        method: 'POST',
+        content_type: 'application/json',
+        body_schema: {
+          brand: 'string up to 60 chars (optional if model given)',
+          model: 'string up to 80 chars (optional if brand given)',
+          purchase_date: 'string YYYY-MM-DD (optional)',
+          retire_at_km: 'number 1-5000 (optional, default 700)',
+        },
+        example_body: {
+          brand: 'Asics',
+          model: 'Novablast 5',
+          purchase_date: today,
+          retire_at_km: 700,
+        },
+        notes: auth.canWrite
+          ? 'POST adds a shoe. GET /api/shoes lists shoes with computed current_km.'
+          : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
+      },
     },
   }
 
@@ -159,6 +452,7 @@ export async function GET(request: NextRequest) {
       activities: activities ?? [],
       training_sessions: trainingSessions ?? [],
       daily_logs: dailyLogs ?? [],
+      shoes: shoesEnriched,
     },
     { headers: { 'Cache-Control': 'no-store' } },
   )
