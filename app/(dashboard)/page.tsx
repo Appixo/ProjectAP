@@ -17,6 +17,7 @@ import {
 } from '@/components/dashboard/WeekStrip'
 import { UpcomingWeeks } from '@/components/dashboard/UpcomingWeeks'
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
+import { Adherence } from '@/components/dashboard/Adherence'
 import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
@@ -127,6 +128,9 @@ export default async function DashboardPage() {
 
   const nextMondayYmd = addWeeks(todayMonday, 1)
   const upcomingHorizonMonday = addWeeks(todayMonday, 4) // 3 weeks ahead end
+  const adherenceWindowStartIso = new Date(
+    now.getTime() - 14 * 86400 * 1000,
+  ).toISOString()
   const lastWeekStartIso = new Date(
     lastWeekMonday + 'T00:00:00Z',
   ).toISOString()
@@ -149,6 +153,7 @@ export default async function DashboardPage() {
     { data: thisWeekSessionsRaw },
     { data: lastWeekSessionsRaw },
     { data: upcomingSessionsRaw },
+    { data: adherenceSessionsRaw },
     { data: goalsRaw },
   ] = await Promise.all([
     supabase
@@ -236,6 +241,15 @@ export default async function DashboardPage() {
       .lt('session_at', upcomingHorizonIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
+    // Adherence window: all sessions in the last 14 days, regardless of
+    // status, plus any planned sessions in the next 14 days for the
+    // "upcoming" count.
+    supabase
+      .from('training_sessions')
+      .select('id, session_at, status')
+      .gte('session_at', adherenceWindowStartIso)
+      .lt('session_at', new Date(now.getTime() + 14 * 86400 * 1000).toISOString())
+      .returns<{ id: string; session_at: string; status: string | null }[]>(),
     supabase
       .from('goals')
       .select(
@@ -398,6 +412,25 @@ export default async function DashboardPage() {
   const thisWeekSessions = thisWeekSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
 
+  // Adherence in the last 14 days. Past planned-but-not-completed = missed.
+  let completed = 0
+  let skipped = 0
+  let missed = 0
+  let upcomingPlanned = 0
+  const nowMs = now.getTime()
+  for (const s of adherenceSessionsRaw ?? []) {
+    const sessionMs = new Date(s.session_at).getTime()
+    const isPast = sessionMs <= nowMs
+    const status = s.status ?? 'completed'
+    if (isPast) {
+      if (status === 'completed') completed += 1
+      else if (status === 'skipped') skipped += 1
+      else if (status === 'planned') missed += 1
+    } else {
+      if (status === 'planned') upcomingPlanned += 1
+    }
+  }
+
   // Personal bests computed across all-time runs. bestEfforts() accepts the
   // ActivityForDerived shape; we only need id/start_at/distance_m/moving_time_s
   // /type/source — fill the remaining fields with safe defaults.
@@ -517,6 +550,14 @@ export default async function DashboardPage() {
 
       {/* personal bests across all time */}
       <PersonalBests best={personalBests} />
+
+      {/* adherence — last 14 days planned vs completed */}
+      <Adherence
+        completed={completed}
+        skipped={skipped}
+        missed={missed}
+        upcomingPlanned={upcomingPlanned}
+      />
 
       {/* this week — cross-modal day grid */}
       <WeekStrip
