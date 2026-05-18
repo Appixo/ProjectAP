@@ -13,6 +13,7 @@ import {
   WeekStrip,
   type WeekStripRun,
   type WeekStripSession,
+  type SessionDescription,
 } from '@/components/dashboard/WeekStrip'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
@@ -61,6 +62,10 @@ interface RawSession {
   modality: string
   duration_min: number | null
   rpe: number | null
+  status: 'planned' | 'completed' | 'skipped' | null
+  description: SessionDescription | null
+  format: string | null
+  notes: string | null
 }
 
 interface RawGoals {
@@ -162,7 +167,7 @@ export default async function DashboardPage() {
     supabase
       .from('training_sessions')
       .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe',
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
       )
       .gte('session_at', thisWeekStartIso)
       .lt('session_at', nextWeekStartIso)
@@ -171,7 +176,7 @@ export default async function DashboardPage() {
     supabase
       .from('training_sessions')
       .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe',
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
       )
       .gte('session_at', lastWeekStartIso)
       .lt('session_at', thisWeekStartIso)
@@ -346,13 +351,19 @@ export default async function DashboardPage() {
     moving_time_s: r.moving_time_s,
     runType: r.runType,
   }))
-  const stripSessions: WeekStripSession[] = thisWeekSessions.map(s => ({
-    id: s.id,
-    session_at_local: s.session_at_local,
-    modality: s.modality,
-    duration_min: s.duration_min,
-    rpe: s.rpe,
-  }))
+  const stripSessions: WeekStripSession[] = thisWeekSessions
+    .filter(s => (s.status ?? 'completed') !== 'skipped')
+    .map(s => ({
+      id: s.id,
+      session_at_local: s.session_at_local,
+      modality: s.modality,
+      duration_min: s.duration_min,
+      rpe: s.rpe,
+      status: s.status,
+      description: s.description,
+      format: s.format,
+      notes: s.notes,
+    }))
 
   const reviewSessions: WeekReviewSession[] = lastWeekSessions.map(s => ({
     id: s.id,
