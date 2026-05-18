@@ -643,7 +643,7 @@ Content-Type: application/json
 
 {
   "session_at_local": "${new Date().toISOString().slice(0, 16)}",
-  "modality": "football",  // strength_upper | strength_lower | football | mobility | other
+  "modality": "football",  // strength_upper | strength_lower | strength_full | football | cycling | swimming | mobility | other
   "duration_min": 50,      // optional, 1-600
   "rpe": 7,                // optional, 1-10
   "format": "6v6 2x25min", // optional

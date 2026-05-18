@@ -130,7 +130,7 @@ export async function GET(request: NextRequest) {
           session_at_local:
             'string, YYYY-MM-DDTHH:MM in Europe/Amsterdam local time (required)',
           modality:
-            'string, one of: strength_upper, strength_lower, football, mobility, other (required)',
+            'string, one of: strength_upper, strength_lower, strength_full, football, cycling, swimming, mobility, other (required)',
           duration_min: 'integer 1-600 (optional)',
           rpe: 'integer 1-10 (optional)',
           format: 'string up to 80 chars (optional)',

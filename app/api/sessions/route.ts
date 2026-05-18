@@ -6,7 +6,10 @@ import { amsterdamWallClockToUtcIso } from '@/lib/time/week'
 const VALID_MODALITIES = [
   'strength_upper',
   'strength_lower',
+  'strength_full',
   'football',
+  'cycling',
+  'swimming',
   'mobility',
   'other',
 ] as const

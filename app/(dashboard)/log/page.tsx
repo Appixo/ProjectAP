@@ -40,7 +40,10 @@ const HABITS = [
 const MODALITIES = [
   { value: 'strength_upper', label: 'Strength upper' },
   { value: 'strength_lower', label: 'Strength lower' },
+  { value: 'strength_full', label: 'Strength full' },
   { value: 'football', label: 'Football' },
+  { value: 'cycling', label: 'Cycling' },
+  { value: 'swimming', label: 'Swimming' },
   { value: 'mobility', label: 'Mobility' },
   { value: 'other', label: 'Other' },
 ] as const
