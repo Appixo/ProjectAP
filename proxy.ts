@@ -8,6 +8,8 @@ const PUBLIC_PATHS = [
   '/api/strava/webhook',
   '/api/export',
   '/api/sessions',
+  '/api/daily-logs',
+  '/api/shoes',
 ]
 
 function isPublic(path: string): boolean {
