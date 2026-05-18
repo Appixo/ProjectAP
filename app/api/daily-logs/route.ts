@@ -2,8 +2,29 @@ import { NextResponse, type NextRequest } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { resolveApiAuth, touchTokenLastUsed } from '@/lib/auth/api-auth'
 
+// Controlled vocabulary for soreness.area. Matches the enum advertised in
+// /api/export's context.schema.daily_logs.soreness. Free-text would let
+// "calf" vs "calves" silently split a trend.
+const SORENESS_AREAS = [
+  'calves',
+  'hamstrings',
+  'quads',
+  'glutes',
+  'hip_flexors',
+  'lower_back',
+  'shins',
+  'feet',
+  'ankles',
+  'knees',
+  'achilles',
+  'it_band',
+  'other',
+] as const
+
+type SorenessArea = (typeof SORENESS_AREAS)[number]
+
 interface SorenessEntry {
-  area: string
+  area: SorenessArea
   score_1_5: number
 }
 
@@ -88,7 +109,7 @@ function stringOrNull(v: unknown, maxLen: number): string | null | 'invalid' {
   return trimmed
 }
 
-// soreness: array of { area: string (<=40), score_1_5: int 1-5 }
+// soreness: array of { area: <one of SORENESS_AREAS>, score_1_5: int 1-5 }.
 function sorenessOrNull(
   v: unknown,
 ): SorenessEntry[] | null | 'invalid' {
@@ -99,12 +120,14 @@ function sorenessOrNull(
     if (!item || typeof item !== 'object') return 'invalid'
     const area = (item as Record<string, unknown>).area
     const score = (item as Record<string, unknown>).score_1_5
-    if (typeof area !== 'string' || area.trim() === '' || area.length > 40) {
+    if (typeof area !== 'string') return 'invalid'
+    const trimmed = area.trim().toLowerCase()
+    if (!(SORENESS_AREAS as readonly string[]).includes(trimmed)) {
       return 'invalid'
     }
     const s = numOrNull(score, 1, 5, { integer: true })
     if (s === 'invalid' || s === null) return 'invalid'
-    out.push({ area: area.trim(), score_1_5: s })
+    out.push({ area: trimmed as SorenessArea, score_1_5: s })
   }
   return out
 }

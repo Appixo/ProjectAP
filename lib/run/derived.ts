@@ -17,6 +17,25 @@ const MAX_HR_CEILING = 215
 const MAX_HR_FLOOR = 100
 // Fallback when there aren't enough HR-tagged runs to estimate personal max.
 const DEFAULT_PERSONAL_MAX_HR = 190
+// Only max_heartrate readings from runs on or after this date are used to
+// estimate personal_max_bpm. Before this, HR came from a wrist watch with
+// known sensor drift; since then, from a chest-strap-quality arm band.
+// Update if the sensor changes again.
+const HR_DATA_RELIABLE_SINCE = '2026-04-27'
+
+// Easy/hard split threshold as a fraction of personal_max_bpm. 0.80 is the
+// conventional zone-2 ceiling: avg HR at or below this counts as easy time,
+// anything above counts as moderate-or-harder. (The previous 0.75 was too
+// low — that's roughly LT1 / aerobic-base, not the easy↔hard cutoff.)
+const EASY_HARD_THRESHOLD_FRACTION = 0.8
+
+// Same-day fragment detection: two activities on the same Amsterdam
+// calendar date, starting within this many seconds of each other, where
+// one is below this distance are treated as one outing split in two. The
+// smaller activity is excluded from derived metrics so it doesn't inflate
+// run count, easy time, or weekly volume sums (raw rows stay untouched).
+const FRAGMENT_MAX_GAP_S = 3 * 3600
+const FRAGMENT_MAX_DISTANCE_M = 10000
 
 export interface ActivityForDerived {
   start_at: string
@@ -94,14 +113,51 @@ function sumKm(activities: ActivityForDerived[]): number {
   return activities.reduce((s, a) => s + (a.distance_m ?? 0), 0) / 1000
 }
 
+// Identify same-day fragments. Two activities on the same Amsterdam date,
+// starting within FRAGMENT_MAX_GAP_S of each other, smaller one shorter
+// than FRAGMENT_MAX_DISTANCE_M → the smaller one is the fragment. Returns
+// a Set of start_at strings to exclude. Returning start_at instead of a
+// fabricated key keeps the caller's filter explicit (no shared makeKey).
+function detectFragments(runs: ActivityForDerived[]): Set<string> {
+  const byDay = new Map<string, ActivityForDerived[]>()
+  for (const r of runs) {
+    const day = ymdInAmsterdam(new Date(r.start_at))
+    const list = byDay.get(day) ?? []
+    list.push(r)
+    byDay.set(day, list)
+  }
+  const exclude = new Set<string>()
+  for (const list of byDay.values()) {
+    if (list.length < 2) continue
+    // Pairwise — if more than 2 share a day, every pair is checked, and
+    // only fragments (small + close-in-time) are marked.
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i]
+        const b = list[j]
+        const gap = Math.abs(
+          new Date(a.start_at).getTime() - new Date(b.start_at).getTime(),
+        ) / 1000
+        if (gap > FRAGMENT_MAX_GAP_S) continue
+        const smaller = a.distance_m <= b.distance_m ? a : b
+        if (smaller.distance_m >= FRAGMENT_MAX_DISTANCE_M) continue
+        exclude.add(smaller.start_at)
+      }
+    }
+  }
+  return exclude
+}
+
 export function deriveMetrics(
   activities: ActivityForDerived[],
   now: Date,
   primaryEventDate: string | null,
 ): DerivedMetrics {
-  const runs = activities.filter(
+  const rawRuns = activities.filter(
     a => a.type === 'Run' && (a.source ?? 'synced') !== 'inferred',
   )
+  const fragmentExcludes = detectFragments(rawRuns)
+  const runs = rawRuns.filter(r => !fragmentExcludes.has(r.start_at))
   const nowMs = now.getTime()
   const todayAms = ymdInAmsterdam(now)
 
@@ -133,14 +189,16 @@ export function deriveMetrics(
     let hardS = 0
     if (useHr) {
       // Personal-max estimate from the 95th percentile of plausible
-      // max_heartrate readings (after dropping sensor spikes and 0s).
+      // max_heartrate readings — sampled only from runs after the sensor
+      // switch date, since pre-switch wrist-watch HR is unreliable.
       // Falls back to a safe constant when too few samples exist.
       const cleanMaxHr = runs
+        .filter(r => r.start_at.slice(0, 10) >= HR_DATA_RELIABLE_SINCE)
         .map(r => r.max_heartrate ?? 0)
         .filter(v => v >= MAX_HR_FLOOR && v <= MAX_HR_CEILING)
         .sort((a, b) => a - b)
       const personalMax = percentile95(cleanMaxHr) ?? DEFAULT_PERSONAL_MAX_HR
-      const threshold = personalMax * 0.75
+      const threshold = personalMax * EASY_HARD_THRESHOLD_FRACTION
       for (const r of runs28d) {
         const time = r.moving_time_s ?? 0
         if (

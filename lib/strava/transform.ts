@@ -40,6 +40,19 @@ export interface ActivityRow {
   updated_at: string
 }
 
+// Anatomically implausible HR ceiling. Wrist watches occasionally report
+// values like 211+ bpm during cold weather or strap shifts; we drop those
+// on the way in so downstream metrics aren't poisoned. The raw payload is
+// still persisted under `raw` for forensics.
+const MAX_HR_CEILING = 215
+
+function sanitiseMaxHr(v: number | null): number | null {
+  if (v === null || v === undefined) return null
+  if (!Number.isFinite(v)) return null
+  if (v > MAX_HR_CEILING) return null
+  return v
+}
+
 export function transformActivity(
   a: StravaSummaryActivity,
   userId: string,
@@ -60,7 +73,7 @@ export function transformActivity(
     elapsed_time_s: a.elapsed_time,
     total_elevation_gain_m: a.total_elevation_gain,
     average_heartrate: a.average_heartrate,
-    max_heartrate: a.max_heartrate,
+    max_heartrate: sanitiseMaxHr(a.max_heartrate),
     average_speed_mps: a.average_speed,
     max_speed_mps: a.max_speed,
     has_heartrate: a.has_heartrate ?? false,

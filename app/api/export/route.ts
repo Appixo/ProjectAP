@@ -71,7 +71,11 @@ const SCHEMA = {
     elapsed_time_s: { type: 'integer', unit: 'seconds' },
     total_elevation_gain_m: { type: 'number', unit: 'meters' },
     average_heartrate: { type: 'number', unit: 'bpm' },
-    max_heartrate: { type: 'number', unit: 'bpm' },
+    max_heartrate: {
+      type: 'number',
+      unit: 'bpm',
+      note: 'sanitised at ingest: values >215 bpm are dropped as sensor artefacts',
+    },
     average_speed_mps: { type: 'number', unit: 'm/s' },
     max_speed_mps: { type: 'number', unit: 'm/s' },
     has_heartrate: { type: 'boolean' },
@@ -88,7 +92,12 @@ const SCHEMA = {
       values: ['easy', 'long', 'tempo', 'threshold', 'vo2', 'race', 'recovery'],
       optional: true,
     },
-    source: { type: 'enum', values: ['logged', 'synced', 'inferred'], default: 'synced' },
+    source: {
+      type: 'enum',
+      values: ['logged', 'synced', 'inferred'],
+      default: 'synced',
+      note: "'synced' for Strava-imported rows; 'logged' for manual entries; 'inferred' for speculative rows excluded from derived metrics.",
+    },
   },
   training_sessions: {
     id: { type: 'uuid' },
@@ -124,8 +133,13 @@ const SCHEMA = {
     hrv_ms: { type: 'integer', unit: 'ms', range: '1-500', optional: true },
     soreness: {
       type: 'array',
-      shape: { area: 'string', score_1_5: 'integer 1-5' },
+      shape: {
+        area:
+          'enum: calves, hamstrings, quads, glutes, hip_flexors, lower_back, shins, feet, ankles, knees, achilles, it_band, other',
+        score_1_5: 'integer 1-5',
+      },
       optional: true,
+      note: 'controlled vocabulary on area — use exactly one of the listed values to avoid fragmenting trend analysis',
     },
     water_l: { type: 'number', unit: 'litres', range: '0-20', optional: true },
     caffeine_mg: { type: 'integer', unit: 'mg', range: '0-2000', optional: true },
@@ -152,7 +166,12 @@ const SCHEMA = {
     brand: { type: 'string', optional: true },
     model: { type: 'string', optional: true },
     purchase_date: { type: 'string', format: 'YYYY-MM-DD', optional: true },
-    retire_at_km: { type: 'number', unit: 'km', default: 700 },
+    retire_at_km: {
+      type: 'number',
+      unit: 'km',
+      default: 700,
+      note: `kilometres at which the shoe should be retired. The over_threshold_km flag fires earlier (at ${SHOE_HIGH_KM_FLAG} km) as an early-warning band before full retirement.`,
+    },
     retired_at: { type: 'string', format: 'ISO 8601 UTC', optional: true },
     current_km: {
       type: 'number',
@@ -185,23 +204,27 @@ const SCHEMA = {
       shape: {
         easy: 'number (pct of moving_time_s, last 28d)',
         hard: 'number (pct of moving_time_s, last 28d)',
-        basis: 'enum: hr (>=5 runs with HR, threshold 75% of personal max) | pace (heuristic classifier)',
+        basis: 'enum: hr (>=5 runs with HR, threshold = 80% of personal_max_bpm) | pace (heuristic classifier)',
         personal_max_bpm:
-          'integer, only when basis=hr — 95th percentile of plausible max_heartrate readings across all runs (after dropping <100 or >215 bpm artefacts)',
+          'integer, only when basis=hr — 95th percentile of max_heartrate readings, sampled ONLY from runs on or after the sensor-switch date (2026-04-27), to avoid wrist-watch sensor drift anchoring the threshold. Values <100 or >215 bpm dropped as artefacts.',
         threshold_bpm:
-          'integer, only when basis=hr — 75% of personal_max_bpm. avg_hr <= threshold counts as easy time.',
+          'integer, only when basis=hr — 80% of personal_max_bpm (zone-2 ceiling). avg_hr <= threshold counts as easy time, above as moderate-or-harder.',
       },
       window: 'last 28 calendar days in Europe/Amsterdam, inclusive of today',
     },
     longest_run_per_week_km: {
       type: 'array',
-      shape: { week_start: 'YYYY-MM-DD (Mon UTC)', km: 'number' },
+      shape: {
+        week_start:
+          'YYYY-MM-DD — Monday in UTC. Differs from context.week_starts (Amsterdam Monday) for runs starting in the first hour or two after local midnight; edge case only.',
+        km: 'number',
+      },
       note: 'last 12 weeks',
     },
     riegel_predicted_marathon_s: {
       type: 'integer',
       unit: 'seconds',
-      note: 'Riegel formula T2 = T1 * (D2/D1)^1.06, applied to fastest pace among recent runs >= 5 km in last 90 days',
+      note: 'Riegel formula T2 = T1 * (D2/D1)^1.06, applied to fastest pace among recent runs >= 5 km in last 90 days (uses moving_time_s, not elapsed). 5 km is the minimum; research-defensible floor for marathon extrapolation is 10 km — interpret short-distance predictions as fitness ceilings, not race times.',
     },
     riegel_basis: {
       type: 'object',
@@ -213,6 +236,8 @@ const SCHEMA = {
   notes: {
     inferred_rows:
       "Rows with source='inferred' are speculative (e.g. system-filled) and are excluded from context.derived metrics until promoted to source='logged'.",
+    same_day_fragments:
+      "When Strava records one outing as two activities (watch died mid-run, phone restart, or paused-and-resumed) — same Amsterdam calendar day, started within 3 hours of each other, smaller activity under 10 km — the smaller is treated as a fragment and excluded from context.derived metrics. Both raw rows still appear in the activities array.",
   },
 } as const
 
