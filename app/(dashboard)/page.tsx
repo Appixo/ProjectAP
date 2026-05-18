@@ -15,6 +15,7 @@ import {
   type WeekStripSession,
   type SessionDescription,
 } from '@/components/dashboard/WeekStrip'
+import { UpcomingWeeks } from '@/components/dashboard/UpcomingWeeks'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
 import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
@@ -122,6 +123,7 @@ export default async function DashboardPage() {
   )
 
   const nextMondayYmd = addWeeks(todayMonday, 1)
+  const upcomingHorizonMonday = addWeeks(todayMonday, 4) // 3 weeks ahead end
   const lastWeekStartIso = new Date(
     lastWeekMonday + 'T00:00:00Z',
   ).toISOString()
@@ -131,6 +133,9 @@ export default async function DashboardPage() {
   const nextWeekStartIso = new Date(
     nextMondayYmd + 'T00:00:00Z',
   ).toISOString()
+  const upcomingHorizonIso = new Date(
+    upcomingHorizonMonday + 'T00:00:00Z',
+  ).toISOString()
 
   const [
     { data: rawActivities },
@@ -138,6 +143,7 @@ export default async function DashboardPage() {
     { data: lastWeekLogs },
     { data: thisWeekSessionsRaw },
     { data: lastWeekSessionsRaw },
+    { data: upcomingSessionsRaw },
     { data: goalsRaw },
   ] = await Promise.all([
     supabase
@@ -180,6 +186,15 @@ export default async function DashboardPage() {
       )
       .gte('session_at', lastWeekStartIso)
       .lt('session_at', thisWeekStartIso)
+      .order('session_at', { ascending: true })
+      .returns<RawSession[]>(),
+    supabase
+      .from('training_sessions')
+      .select(
+        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes',
+      )
+      .gte('session_at', nextWeekStartIso)
+      .lt('session_at', upcomingHorizonIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
     supabase
@@ -343,6 +358,19 @@ export default async function DashboardPage() {
 
   const thisWeekSessions = thisWeekSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
+  const upcomingSessions: WeekStripSession[] = (upcomingSessionsRaw ?? [])
+    .filter(s => (s.status ?? 'completed') !== 'skipped')
+    .map(s => ({
+      id: s.id,
+      session_at_local: s.session_at_local,
+      modality: s.modality,
+      duration_min: s.duration_min,
+      rpe: s.rpe,
+      status: s.status,
+      description: s.description,
+      format: s.format,
+      notes: s.notes,
+    }))
 
   const stripRuns: WeekStripRun[] = thisWeekRuns.map(r => ({
     id: r.id,
@@ -404,6 +432,17 @@ export default async function DashboardPage() {
         runs={stripRuns}
         sessions={stripSessions}
       />
+
+      {/* next 3 weeks — planned workouts */}
+      {upcomingSessions.length > 0 && (
+        <UpcomingWeeks
+          thisMonday={todayMonday}
+          todayYmd={todayYmd}
+          sessions={upcomingSessions}
+          planWeekStart={plan.weekNumber}
+          totalPlanWeeks={plan.totalWeeks}
+        />
+      )}
 
       {/* week review */}
       <WeekReview
