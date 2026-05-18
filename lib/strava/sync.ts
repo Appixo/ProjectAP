@@ -76,7 +76,50 @@ export async function upsertIfRun(
     .from('activities')
     .upsert(row, { onConflict: 'id' })
   if (error) throw error
+
+  // Auto-match: if exactly one planned run_* session exists on the same
+  // Amsterdam calendar day for this user and is unmatched, flip it to
+  // completed and link to this activity. Multiple matches → skip (can't
+  // tell which planned session this run fulfils without more signal).
+  try {
+    await matchPlannedRun(supabase, userId, row.id, row.start_at_local)
+  } catch {
+    // Matching is best-effort; never let it fail the activity upsert.
+  }
   return true
+}
+
+export async function matchPlannedRun(
+  supabase: SupabaseClient,
+  userId: string,
+  activityId: number,
+  startAtLocal: string, // naive timestamp string, "YYYY-MM-DDTHH:MM:SS"
+): Promise<boolean> {
+  const ymd = startAtLocal.slice(0, 10)
+  // Look for planned run_* sessions on the same Amsterdam calendar day
+  // that don't already have a matched activity.
+  const { data: candidates, error } = await supabase
+    .from('training_sessions')
+    .select('id, modality, matched_activity_id')
+    .eq('user_id', userId)
+    .eq('status', 'planned')
+    .like('modality', 'run_%')
+    .is('matched_activity_id', null)
+    .gte('session_at_local', `${ymd}T00:00:00`)
+    .lt('session_at_local', `${ymd}T23:59:59`)
+  if (error || !candidates) return false
+  if (candidates.length !== 1) return false
+
+  const target = candidates[0]
+  const { error: updErr } = await supabase
+    .from('training_sessions')
+    .update({
+      status: 'completed',
+      matched_activity_id: activityId,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', target.id)
+  return !updErr
 }
 
 export async function deleteActivityById(
