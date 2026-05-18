@@ -207,6 +207,30 @@ const SCHEMA = {
     source: { type: 'enum', values: ['logged', 'derived', 'synced'], default: 'logged' },
     notes: { type: 'string', max_length: 2000, optional: true },
   },
+  benchmarks: {
+    id: { type: 'uuid' },
+    performed_at: { type: 'string', format: 'YYYY-MM-DD' },
+    test_type: {
+      type: 'enum',
+      values: [
+        'max_hr_test',
+        'lthr_test',
+        'vo2_test',
+        'race_5k',
+        'race_10k',
+        'race_half',
+        'race_full',
+        'other',
+      ],
+      note: 'max_hr_test: graded test to find true max HR. lthr_test: 30-min time trial; avg HR last 20 min = LTHR (Friel method). vo2_test: lab or estimated VO2max.',
+    },
+    max_hr_bpm: { type: 'integer', range: '100-220', optional: true },
+    lthr_bpm: { type: 'integer', range: '100-220', optional: true, note: 'lactate threshold HR' },
+    vo2max_ml_per_kg_min: { type: 'number', range: '20-90', optional: true },
+    pace_at_threshold_s_per_km: { type: 'integer', range: '120-900', optional: true, note: 'pace held at LTHR' },
+    activity_id: { type: 'integer', references: 'activities.id', optional: true },
+    notes: { type: 'string', max_length: 2000, optional: true },
+  },
   shoes: {
     id: { type: 'uuid' },
     brand: { type: 'string', optional: true },
@@ -313,6 +337,7 @@ export async function GET(request: NextRequest) {
     { data: trainingSessions },
     { data: goalsRow },
     { data: shoes },
+    { data: benchmarks },
     { data: pbs },
     { data: user },
   ] = await Promise.all([
@@ -363,6 +388,28 @@ export async function GET(request: NextRequest) {
       .eq('user_id', auth.userId)
       .order('created_at', { ascending: false })
       .returns<ShoeRow[]>(),
+    admin
+      .from('benchmarks')
+      .select(
+        'id, performed_at, test_type, max_hr_bpm, lthr_bpm, vo2max_ml_per_kg_min, pace_at_threshold_s_per_km, activity_id, notes, created_at, updated_at',
+      )
+      .eq('user_id', auth.userId)
+      .order('performed_at', { ascending: false })
+      .returns<
+        {
+          id: string
+          performed_at: string
+          test_type: string
+          max_hr_bpm: number | null
+          lthr_bpm: number | null
+          vo2max_ml_per_kg_min: number | null
+          pace_at_threshold_s_per_km: number | null
+          activity_id: number | null
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }[]
+      >(),
     admin
       .from('personal_bests')
       .select(
@@ -590,6 +637,33 @@ export async function GET(request: NextRequest) {
           ? 'POST adds a shoe. GET /api/shoes lists shoes with computed current_km.'
           : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
       },
+      benchmarks: {
+        url: writeUrlFor('/api/benchmarks'),
+        url_pattern: urlPatternFor('/api/benchmarks'),
+        method: 'POST',
+        content_type: 'application/json',
+        body_schema: {
+          performed_at: 'string YYYY-MM-DD (required)',
+          test_type:
+            'enum (required): max_hr_test | lthr_test | vo2_test | race_5k | race_10k | race_half | race_full | other',
+          max_hr_bpm: 'integer 100-220 (optional)',
+          lthr_bpm: 'integer 100-220 (optional)',
+          vo2max_ml_per_kg_min: 'number 20-90 (optional)',
+          pace_at_threshold_s_per_km: 'integer 120-900 (optional)',
+          activity_id: 'integer (optional) — Strava activity link',
+          notes: 'string up to 2000 chars (optional)',
+        },
+        example_body: {
+          performed_at: today,
+          test_type: 'lthr_test',
+          lthr_bpm: 156,
+          pace_at_threshold_s_per_km: 268,
+          notes: '30-min TT, avg HR last 20 min = 156, pace 4:28/km',
+        },
+        notes: auth.canWrite
+          ? 'POST a benchmark result. At least one measurement field (max_hr_bpm / lthr_bpm / vo2max_ml_per_kg_min / pace_at_threshold_s_per_km) is required.'
+          : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
+      },
       personal_bests: {
         url: writeUrlFor('/api/personal-bests'),
         url_pattern: urlPatternFor('/api/personal-bests'),
@@ -627,6 +701,7 @@ export async function GET(request: NextRequest) {
       daily_logs: dailyLogs ?? [],
       shoes: shoesEnriched,
       personal_bests: pbs ?? [],
+      benchmarks: benchmarks ?? [],
     },
     { headers: { 'Cache-Control': 'no-store' } },
   )
