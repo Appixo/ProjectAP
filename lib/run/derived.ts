@@ -6,6 +6,17 @@
 // responsible for that filter (kept here so the function is reusable).
 
 import { classifyRuns, type RunInput } from './classify'
+import { ymdInAmsterdam } from '@/lib/time/week'
+
+// Anatomically plausible cap when filtering max_heartrate samples for the
+// "personal max" estimate. Strava + watch sensors regularly spike to 200s
+// briefly; values above this are treated as artefacts.
+const MAX_HR_CEILING = 215
+// Minimum max_heartrate to count as a real read (filters obvious 0s and
+// post-pause garbage).
+const MAX_HR_FLOOR = 100
+// Fallback when there aren't enough HR-tagged runs to estimate personal max.
+const DEFAULT_PERSONAL_MAX_HR = 190
 
 export interface ActivityForDerived {
   start_at: string
@@ -23,7 +34,13 @@ export interface DerivedMetrics {
   weekly_km_7d: number | null
   weekly_km_28d: number | null
   acwr_7_28: number | null
-  easy_hard_split_28d_pct: { easy: number; hard: number; basis: 'hr' | 'pace' } | null
+  easy_hard_split_28d_pct: {
+    easy: number
+    hard: number
+    basis: 'hr' | 'pace'
+    personal_max_bpm?: number
+    threshold_bpm?: number
+  } | null
   longest_run_per_week_km: { week_start: string; km: number }[]
   riegel_predicted_marathon_s: number | null
   riegel_basis: {
@@ -42,9 +59,35 @@ function mondayUtcYmd(d: Date): string {
   return m.toISOString().slice(0, 10)
 }
 
-function withinDays(now: number, isoStart: string, days: number): boolean {
-  const t = new Date(isoStart).getTime()
-  return now - t <= days * 86_400_000 && t <= now
+// Date window in Europe/Amsterdam calendar days. `days=7` means the
+// last 7 calendar days *including today* — so a morning run on the
+// 7th-day-ago is included even if the export is generated in the evening.
+// Time-of-day no longer affects which runs fall in or out of the window.
+function addDaysYmd(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  dt.setUTCDate(dt.getUTCDate() + n)
+  return dt.toISOString().slice(0, 10)
+}
+
+function inLastNCalendarDays(
+  activityIso: string,
+  todayAmsYmd: string,
+  days: number,
+): boolean {
+  const cutoff = addDaysYmd(todayAmsYmd, -(days - 1))
+  const actYmd = ymdInAmsterdam(new Date(activityIso))
+  return actYmd >= cutoff && actYmd <= todayAmsYmd
+}
+
+// 95th percentile of a numeric array (sorted ascending). Returns null on
+// empty input. Used to estimate "personal max" HR robustly without letting
+// one sensor spike (e.g. a transient 211 bpm reading) anchor the threshold.
+function percentile95(sorted: number[]): number | null {
+  if (sorted.length === 0) return null
+  if (sorted.length === 1) return sorted[0]
+  const idx = Math.ceil(sorted.length * 0.95) - 1
+  return sorted[Math.max(0, Math.min(sorted.length - 1, idx))]
 }
 
 function sumKm(activities: ActivityForDerived[]): number {
@@ -60,9 +103,10 @@ export function deriveMetrics(
     a => a.type === 'Run' && (a.source ?? 'synced') !== 'inferred',
   )
   const nowMs = now.getTime()
+  const todayAms = ymdInAmsterdam(now)
 
-  const runs7d = runs.filter(a => withinDays(nowMs, a.start_at, 7))
-  const runs28d = runs.filter(a => withinDays(nowMs, a.start_at, 28))
+  const runs7d = runs.filter(a => inLastNCalendarDays(a.start_at, todayAms, 7))
+  const runs28d = runs.filter(a => inLastNCalendarDays(a.start_at, todayAms, 28))
 
   const km7 = Number(sumKm(runs7d).toFixed(2))
   const km28 = Number(sumKm(runs28d).toFixed(2))
@@ -88,10 +132,14 @@ export function deriveMetrics(
     let easyS = 0
     let hardS = 0
     if (useHr) {
-      const personalMax = Math.max(
-        ...runs.map(r => r.max_heartrate ?? 0),
-        180,
-      )
+      // Personal-max estimate from the 95th percentile of plausible
+      // max_heartrate readings (after dropping sensor spikes and 0s).
+      // Falls back to a safe constant when too few samples exist.
+      const cleanMaxHr = runs
+        .map(r => r.max_heartrate ?? 0)
+        .filter(v => v >= MAX_HR_FLOOR && v <= MAX_HR_CEILING)
+        .sort((a, b) => a - b)
+      const personalMax = percentile95(cleanMaxHr) ?? DEFAULT_PERSONAL_MAX_HR
       const threshold = personalMax * 0.75
       for (const r of runs28d) {
         const time = r.moving_time_s ?? 0
@@ -115,6 +163,8 @@ export function deriveMetrics(
           easy: Number(((easyS / total) * 100).toFixed(1)),
           hard: Number(((hardS / total) * 100).toFixed(1)),
           basis: 'hr',
+          personal_max_bpm: Math.round(personalMax),
+          threshold_bpm: Math.round(threshold),
         }
       }
     } else {

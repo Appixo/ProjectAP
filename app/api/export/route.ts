@@ -166,11 +166,19 @@ const SCHEMA = {
     over_retire_km: { type: 'boolean', note: 'true when current_km > retire_at_km' },
   },
   derived: {
-    weekly_km_7d: { type: 'number', unit: 'km' },
-    weekly_km_28d: { type: 'number', unit: 'km' },
+    weekly_km_7d: {
+      type: 'number',
+      unit: 'km',
+      window: 'last 7 calendar days in Europe/Amsterdam, inclusive of today',
+    },
+    weekly_km_28d: {
+      type: 'number',
+      unit: 'km',
+      window: 'last 28 calendar days in Europe/Amsterdam, inclusive of today',
+    },
     acwr_7_28: {
       type: 'number',
-      note: 'acute:chronic workload ratio (km last 7d / (km last 28d / 4)). 0.8-1.3 typical "safe" band.',
+      note: 'acute:chronic workload ratio = weekly_km_7d / (weekly_km_28d / 4). 0.8-1.3 typical "safe" band.',
     },
     easy_hard_split_28d_pct: {
       type: 'object',
@@ -178,7 +186,12 @@ const SCHEMA = {
         easy: 'number (pct of moving_time_s, last 28d)',
         hard: 'number (pct of moving_time_s, last 28d)',
         basis: 'enum: hr (>=5 runs with HR, threshold 75% of personal max) | pace (heuristic classifier)',
+        personal_max_bpm:
+          'integer, only when basis=hr — 95th percentile of plausible max_heartrate readings across all runs (after dropping <100 or >215 bpm artefacts)',
+        threshold_bpm:
+          'integer, only when basis=hr — 75% of personal_max_bpm. avg_hr <= threshold counts as easy time.',
       },
+      window: 'last 28 calendar days in Europe/Amsterdam, inclusive of today',
     },
     longest_run_per_week_km: {
       type: 'array',
