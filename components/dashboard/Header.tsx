@@ -38,6 +38,26 @@ export function DashboardHeader() {
           </div>
           <div>Europe/Amsterdam · km · min/km</div>
         </div>
+        <div className="flex items-center gap-3">
+          <a
+            href="/history"
+            className="text-[11px] uppercase tracking-[0.08em] text-muted hover:text-ink"
+          >
+            history
+          </a>
+          <a
+            href="/log"
+            className="text-[11px] uppercase tracking-[0.08em] text-muted hover:text-ink"
+          >
+            log
+          </a>
+          <a
+            href="/settings"
+            className="text-[11px] uppercase tracking-[0.08em] text-muted hover:text-ink"
+          >
+            settings
+          </a>
+        </div>
         <CopyPromptButton appUrl={appUrl} />
       </div>
     </header>
