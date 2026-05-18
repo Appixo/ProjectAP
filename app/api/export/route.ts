@@ -206,7 +206,7 @@ const SCHEMA = {
         hard: 'number (pct of moving_time_s, last 28d)',
         basis: 'enum: hr (>=5 runs with HR, threshold = 80% of personal_max_bpm) | pace (heuristic classifier)',
         personal_max_bpm:
-          'integer, only when basis=hr — 95th percentile of max_heartrate readings, sampled ONLY from runs on or after the sensor-switch date (2026-04-27), to avoid wrist-watch sensor drift anchoring the threshold. Values <100 or >215 bpm dropped as artefacts.',
+          'integer, only when basis=hr — 95th percentile of plausible max_heartrate readings across all runs. Values <100 or >215 bpm dropped as artefacts at the sample level; the 95th percentile (vs raw max) makes the estimate robust to one-off sensor spikes without needing a date filter.',
         threshold_bpm:
           'integer, only when basis=hr — 80% of personal_max_bpm (zone-2 ceiling). avg_hr <= threshold counts as easy time, above as moderate-or-harder.',
       },

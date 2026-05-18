@@ -17,11 +17,6 @@ const MAX_HR_CEILING = 215
 const MAX_HR_FLOOR = 100
 // Fallback when there aren't enough HR-tagged runs to estimate personal max.
 const DEFAULT_PERSONAL_MAX_HR = 190
-// Only max_heartrate readings from runs on or after this date are used to
-// estimate personal_max_bpm. Before this, HR came from a wrist watch with
-// known sensor drift; since then, from a chest-strap-quality arm band.
-// Update if the sensor changes again.
-const HR_DATA_RELIABLE_SINCE = '2026-04-27'
 
 // Easy/hard split threshold as a fraction of personal_max_bpm. 0.80 is the
 // conventional zone-2 ceiling: avg HR at or below this counts as easy time,
@@ -189,11 +184,13 @@ export function deriveMetrics(
     let hardS = 0
     if (useHr) {
       // Personal-max estimate from the 95th percentile of plausible
-      // max_heartrate readings — sampled only from runs after the sensor
-      // switch date, since pre-switch wrist-watch HR is unreliable.
-      // Falls back to a safe constant when too few samples exist.
+      // max_heartrate readings across all runs. The 100/215 bounds drop
+      // sensor spikes and post-pause zeros at the value level; the p95
+      // (vs raw max) drops one-off outliers. Earlier code also filtered
+      // by date to exclude pre-arm-band wrist data, but that produced
+      // an under-estimate when the recent window happened to contain no
+      // max-effort runs — sample-quality bounds are enough.
       const cleanMaxHr = runs
-        .filter(r => r.start_at.slice(0, 10) >= HR_DATA_RELIABLE_SINCE)
         .map(r => r.max_heartrate ?? 0)
         .filter(v => v >= MAX_HR_FLOOR && v <= MAX_HR_CEILING)
         .sort((a, b) => a - b)
