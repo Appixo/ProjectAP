@@ -1,3 +1,6 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
 import { type RunType } from '@/lib/run/classify'
 
 export interface WeekStripRun {
@@ -14,7 +17,6 @@ export interface WeekStripSession {
   modality: string
   duration_min: number | null
   rpe: number | null
-  // M1+M2 additions for planning surface
   status?: 'planned' | 'completed' | 'skipped' | null
   description?: SessionDescription | null
   format?: string | null
@@ -37,24 +39,27 @@ export interface WeekStripProps {
   todayYmd: string
   runs: WeekStripRun[]
   sessions: WeekStripSession[]
-  // Title can be overridden so the same component renders "This week" or
-  // "Week of May 25" in the upcoming-weeks view.
   title?: string
 }
 
 interface DayItem {
+  key: string
   kind: 'run' | 'session'
   primary: string
   secondary: string
   dotClass: string
   status: 'planned' | 'completed' | 'skipped'
-  tooltip: string | null
+  details: ItemDetail[] | null
+}
+
+interface ItemDetail {
+  label: string
+  value: string
 }
 
 const WEEKDAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
 
 function ymdFromIsoUtc(iso: string): string {
-  // For activities (UTC start_at): use Amsterdam-local YMD.
   return new Date(iso).toLocaleDateString('en-CA', {
     timeZone: 'Europe/Amsterdam',
     year: 'numeric',
@@ -64,7 +69,6 @@ function ymdFromIsoUtc(iso: string): string {
 }
 
 function ymdFromLocalNaive(localIso: string): string {
-  // session_at_local is a naive timestamp string like "2026-05-15T18:30:00"
   return localIso.slice(0, 10)
 }
 
@@ -96,7 +100,6 @@ function sessionDotClass(modality: string): string {
     case 'football':
       return 'bg-warn'
     case 'mobility':
-      return 'bg-success'
     case 'cycling':
     case 'swimming':
       return 'bg-success'
@@ -105,6 +108,25 @@ function sessionDotClass(modality: string): string {
     default:
       return 'bg-faint'
   }
+}
+
+const MODALITY_LABEL: Record<string, string> = {
+  strength_upper: 'Strength upper',
+  strength_lower: 'Strength lower',
+  strength_full: 'Strength full',
+  football: 'Football',
+  mobility: 'Mobility',
+  cycling: 'Cycling',
+  swimming: 'Swimming',
+  run_easy: 'Easy run',
+  run_tempo: 'Tempo run',
+  run_long: 'Long run',
+  run_threshold: 'Threshold run',
+  run_vo2: 'VO2 run',
+  run_race: 'Race',
+  run_recovery: 'Recovery run',
+  rest: 'Rest',
+  other: 'Other',
 }
 
 const MODALITY_SHORT: Record<string, string> = {
@@ -133,33 +155,61 @@ function paceLabel(spk?: number): string | null {
   return `${m}:${String(s).padStart(2, '0')}/km`
 }
 
-function describeSession(s: WeekStripSession): string | null {
-  const d = s.description
-  const parts: string[] = []
-  if (s.status === 'planned') parts.push('PLANNED')
-  parts.push(MODALITY_SHORT[s.modality] ?? s.modality)
-  if (d?.target_distance_km != null) parts.push(`${d.target_distance_km} km`)
-  if (s.duration_min != null) parts.push(`${s.duration_min} min`)
-  if (d?.target_duration_min != null && s.duration_min == null) {
-    parts.push(`${d.target_duration_min} min`)
+function timeOfDay(localIso: string): string {
+  // "2026-05-18T19:00:00" → "19:00"
+  return localIso.slice(11, 16)
+}
+
+function detailsForSession(s: WeekStripSession): ItemDetail[] {
+  const out: ItemDetail[] = []
+  out.push({ label: 'Modality', value: MODALITY_LABEL[s.modality] ?? s.modality })
+  out.push({ label: 'Time', value: timeOfDay(s.session_at_local) })
+  out.push({
+    label: 'Status',
+    value: (s.status ?? 'completed').replace(/^./, c => c.toUpperCase()),
+  })
+  const d = s.description ?? null
+  if (d?.target_distance_km != null) {
+    out.push({ label: 'Target distance', value: `${d.target_distance_km} km` })
+  }
+  if (d?.target_duration_min != null) {
+    out.push({ label: 'Target duration', value: `${d.target_duration_min} min` })
+  }
+  if (s.duration_min != null) {
+    out.push({ label: 'Logged duration', value: `${s.duration_min} min` })
   }
   if (d?.target_hr_min != null && d?.target_hr_max != null) {
-    parts.push(`HR ${d.target_hr_min}-${d.target_hr_max}`)
+    out.push({ label: 'Target HR', value: `${d.target_hr_min}–${d.target_hr_max} bpm` })
   } else if (d?.target_hr_max != null) {
-    parts.push(`HR ≤${d.target_hr_max}`)
+    out.push({ label: 'Max HR', value: `≤ ${d.target_hr_max} bpm` })
   } else if (d?.target_hr_min != null) {
-    parts.push(`HR ≥${d.target_hr_min}`)
+    out.push({ label: 'Min HR', value: `≥ ${d.target_hr_min} bpm` })
   }
   const paceMin = paceLabel(d?.target_pace_s_per_km_min)
   const paceMax = paceLabel(d?.target_pace_s_per_km_max)
-  if (paceMin && paceMax) parts.push(`${paceMin}–${paceMax}`)
-  else if (paceMin) parts.push(paceMin)
-  else if (paceMax) parts.push(paceMax)
-  if (s.rpe != null) parts.push(`RPE ${s.rpe}`)
-  if (s.format) parts.push(s.format)
-  if (d?.reason) parts.push(d.reason)
-  if (s.notes) parts.push(s.notes)
-  return parts.length > 0 ? parts.join('\n') : null
+  if (paceMin && paceMax) out.push({ label: 'Target pace', value: `${paceMin}–${paceMax}` })
+  else if (paceMin) out.push({ label: 'Target pace', value: paceMin })
+  else if (paceMax) out.push({ label: 'Target pace', value: paceMax })
+  if (s.rpe != null) out.push({ label: 'RPE', value: String(s.rpe) })
+  if (s.format) out.push({ label: 'Format', value: s.format })
+  if (d?.reason) out.push({ label: 'Why', value: d.reason })
+  if (s.notes) out.push({ label: 'Notes', value: s.notes })
+  return out
+}
+
+function detailsForRun(r: WeekStripRun): ItemDetail[] {
+  const km = r.distance_m / 1000
+  const min = r.moving_time_s / 60
+  const paceMinPerKm = min / km
+  const m = Math.floor(paceMinPerKm)
+  const s = Math.round((paceMinPerKm - m) * 60)
+  return [
+    { label: 'Distance', value: `${km.toFixed(2)} km` },
+    { label: 'Moving time', value: `${Math.floor(min)} min ${Math.round((min % 1) * 60)} s` },
+    { label: 'Pace', value: `${m}:${String(s).padStart(2, '0')}/km` },
+    { label: 'Type', value: r.runType },
+    { label: 'Time', value: new Date(r.start_at).toLocaleTimeString('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' }) },
+  ]
 }
 
 export function WeekStrip({
@@ -170,6 +220,35 @@ export function WeekStrip({
   sessions,
   title = 'This week',
 }: WeekStripProps) {
+  const [openKey, setOpenKey] = useState<string | null>(null)
+  const containerRef = useRef<HTMLDivElement | null>(null)
+
+  // Close the popover when the user clicks anywhere outside it. We bind to
+  // mousedown so the click that opens it doesn't immediately close.
+  useEffect(() => {
+    if (openKey === null) return
+    function onDocMousedown(e: MouseEvent) {
+      if (!containerRef.current) return
+      if (!(e.target instanceof Node)) return
+      const popoverHit = (e.target as Element).closest('[data-popover="true"]')
+      const itemHit = (e.target as Element).closest('[data-strip-item="true"]')
+      if (popoverHit || itemHit) return
+      setOpenKey(null)
+    }
+    document.addEventListener('mousedown', onDocMousedown)
+    return () => document.removeEventListener('mousedown', onDocMousedown)
+  }, [openKey])
+
+  // Close on Escape.
+  useEffect(() => {
+    if (openKey === null) return
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setOpenKey(null)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [openKey])
+
   const days = Array.from({ length: 7 }, (_, i) => {
     const ymd = addDaysYmd(monday, i)
     return {
@@ -188,12 +267,13 @@ export function WeekStrip({
     const cell = byYmd.get(ymd)
     if (!cell) continue
     cell.items.push({
+      key: `run-${r.id}`,
       kind: 'run',
       primary: `${(r.distance_m / 1000).toFixed(1)} km`,
       secondary: r.runType,
       dotClass: runDotClass(r.runType),
       status: 'completed',
-      tooltip: null,
+      details: detailsForRun(r),
     })
   }
 
@@ -202,7 +282,6 @@ export function WeekStrip({
     const cell = byYmd.get(ymd)
     if (!cell) continue
     const status: 'planned' | 'completed' | 'skipped' = s.status ?? 'completed'
-    const isPlanned = status === 'planned'
     const d = s.description
     let primary: string
     if (s.duration_min != null) primary = `${s.duration_min} min`
@@ -210,12 +289,13 @@ export function WeekStrip({
     else if (d?.target_duration_min != null) primary = `${d.target_duration_min} min`
     else primary = '—'
     cell.items.push({
+      key: `session-${s.id}`,
       kind: 'session',
       primary,
       secondary: MODALITY_SHORT[s.modality] ?? s.modality,
       dotClass: sessionDotClass(s.modality),
       status,
-      tooltip: isPlanned || d != null || s.notes ? describeSession(s) : null,
+      details: detailsForSession(s),
     })
   }
 
@@ -225,7 +305,10 @@ export function WeekStrip({
   const plannedSessions = sessions.filter(s => s.status === 'planned').length
 
   return (
-    <section className="card bg-panel border border-border rounded-[4px] mb-4">
+    <section
+      ref={containerRef}
+      className="card bg-panel border border-border rounded-[4px] mb-4 relative"
+    >
       <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border">
         <h2 className="m-0 text-[11px] uppercase tracking-[0.1em] text-ink-2 font-semibold">
           {title}
@@ -239,9 +322,9 @@ export function WeekStrip({
         {days.map(d => (
           <div
             key={d.ymd}
-            className={`px-3 py-3 border-r border-border last:border-r-0 min-h-28 ${
+            className={`px-3 py-3 border-r border-border last:border-r-0 min-h-28 relative ${
               d.isToday ? 'bg-accent-soft' : ''
-            } ${d.isFuture ? 'opacity-70' : ''}`}
+            } ${d.isFuture ? 'opacity-90' : ''}`}
           >
             <div className="flex items-baseline justify-between mb-2">
               <span
@@ -264,33 +347,47 @@ export function WeekStrip({
               <div className="text-[11px] text-faint">—</div>
             ) : (
               <ul className="space-y-1.5">
-                {d.items.map((it, idx) => (
-                  <li
-                    key={idx}
-                    className={`group relative flex items-start gap-1.5 text-[11px] leading-tight ${
-                      it.tooltip ? 'cursor-help' : ''
-                    } ${it.status === 'planned' ? 'opacity-70' : ''}`}
-                    title={it.tooltip ?? undefined}
-                  >
-                    <span
-                      className={`inline-block w-[6px] h-[6px] mt-[5px] shrink-0 ${
-                        it.status === 'planned'
-                          ? `rounded-full border border-ink-2 bg-transparent`
-                          : `rounded-full ${it.dotClass}`
-                      }`}
-                    />
-                    <div className="min-w-0">
-                      <div
-                        className={`font-mono -tracking-[0.01em] truncate ${
-                          it.status === 'planned' ? 'text-ink-2 italic' : 'text-ink'
-                        }`}
+                {d.items.map(it => {
+                  const isOpen = openKey === it.key
+                  return (
+                    <li key={it.key} className="relative">
+                      <button
+                        type="button"
+                        data-strip-item="true"
+                        onClick={() => setOpenKey(isOpen ? null : it.key)}
+                        aria-expanded={isOpen}
+                        className={`w-full flex items-start gap-1.5 text-left text-[11px] leading-tight rounded px-1 -mx-1 py-0.5 hover:bg-accent-soft focus:outline-none focus:bg-accent-soft transition-colors ${
+                          it.status === 'planned' ? 'opacity-80' : ''
+                        } ${isOpen ? 'bg-accent-soft' : ''}`}
                       >
-                        {it.primary}
-                      </div>
-                      <div className="text-muted truncate">{it.secondary}</div>
-                    </div>
-                  </li>
-                ))}
+                        <span
+                          className={`inline-block w-[6px] h-[6px] mt-[5px] shrink-0 ${
+                            it.status === 'planned'
+                              ? `rounded-full border border-ink-2 bg-transparent`
+                              : `rounded-full ${it.dotClass}`
+                          }`}
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div
+                            className={`font-mono -tracking-[0.01em] truncate ${
+                              it.status === 'planned' ? 'text-ink-2 italic' : 'text-ink'
+                            }`}
+                          >
+                            {it.primary}
+                          </div>
+                          <div className="text-muted truncate">{it.secondary}</div>
+                        </div>
+                      </button>
+
+                      {isOpen && it.details && (
+                        <ItemPopover
+                          details={it.details}
+                          onClose={() => setOpenKey(null)}
+                        />
+                      )}
+                    </li>
+                  )
+                })}
               </ul>
             )}
           </div>
@@ -307,5 +404,42 @@ export function WeekStrip({
         </span>
       </div>
     </section>
+  )
+}
+
+function ItemPopover({
+  details,
+  onClose,
+}: {
+  details: ItemDetail[]
+  onClose: () => void
+}) {
+  return (
+    <div
+      data-popover="true"
+      role="dialog"
+      className="absolute z-20 top-full left-0 mt-1 w-[240px] rounded border border-border bg-panel shadow-lg p-3 space-y-1.5 text-[11px]"
+    >
+      <div className="flex justify-end -mt-1 -mr-1">
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="text-muted hover:text-ink text-[14px] leading-none px-1"
+        >
+          ×
+        </button>
+      </div>
+      <dl className="space-y-1">
+        {details.map((d, idx) => (
+          <div key={idx} className="grid grid-cols-[80px_1fr] gap-2">
+            <dt className="text-muted uppercase tracking-[0.06em] text-[10px] mt-0.5">
+              {d.label}
+            </dt>
+            <dd className="text-ink-2 break-words">{d.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }
