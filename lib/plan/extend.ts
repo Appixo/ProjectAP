@@ -5,6 +5,10 @@ import { generatePlan, type SessionInput } from './generate'
 import { PROGRESSION } from './progression'
 import { deriveMetrics, type ActivityForDerived } from '@/lib/run/derived'
 import { amsterdamWallClockToUtcIso, todayMondayInAmsterdam, addWeeks } from '@/lib/time/week'
+// addWeeks is used inside the loop below for per-week range bounds; the
+// horizon filter takes the first N PROGRESSION rows whose Monday is today
+// or later, regardless of calendar gap, so we always materialise exactly
+// HORIZON_WEEKS plan weeks even when "today" sits before the plan starts.
 import type { ManualPersonalBest } from '@/lib/run/best_efforts'
 
 // Materialise the next HORIZON_WEEKS of the marathon plan as training_sessions
@@ -24,11 +28,10 @@ export async function extendPlanForOwner(): Promise<ExtendPlanResult> {
   const admin = createSupabaseAdminClient()
 
   const todayMonday = todayMondayInAmsterdam()
-  const horizonEndMonday = addWeeks(todayMonday, HORIZON_WEEKS)
 
-  const targetWeeks = PROGRESSION.filter(
-    w => w.mondayYmd >= todayMonday && w.mondayYmd < horizonEndMonday,
-  )
+  const targetWeeks = PROGRESSION
+    .filter(w => w.mondayYmd >= todayMonday)
+    .slice(0, HORIZON_WEEKS)
 
   const materialised: ExtendPlanResult['materialised_weeks'] = []
   const skipped: ExtendPlanResult['skipped_weeks'] = []
