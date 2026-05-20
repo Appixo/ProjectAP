@@ -573,6 +573,9 @@ export function WeekStrip({
                         <ItemPopover
                           details={it.details}
                           onClose={() => setOpenKey(null)}
+                          editHref={
+                            it.sessionId ? `/log/session/${it.sessionId}/edit` : undefined
+                          }
                           actions={
                             it.isMissed && it.sessionId
                               ? {
@@ -617,10 +620,12 @@ interface PopoverActions {
 function ItemPopover({
   details,
   onClose,
+  editHref,
   actions,
 }: {
   details: ItemDetail[]
   onClose: () => void
+  editHref?: string
   actions?: PopoverActions
 }) {
   return (
@@ -629,7 +634,17 @@ function ItemPopover({
       role="dialog"
       className="absolute z-20 top-full left-0 mt-1 w-[240px] rounded border border-border bg-panel shadow-lg p-3 space-y-1.5 text-[11px]"
     >
-      <div className="flex justify-end -mt-1 -mr-1">
+      <div className="flex justify-between items-center -mt-1 -mr-1">
+        {editHref ? (
+          <a
+            href={editHref}
+            className="text-muted hover:text-ink font-mono text-[10px] uppercase tracking-[0.06em] px-1"
+          >
+            edit
+          </a>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
           onClick={onClose}
