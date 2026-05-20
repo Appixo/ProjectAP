@@ -41,6 +41,13 @@ export function addWeeks(ymd: string, n: number): string {
   return date.toISOString().slice(0, 10)
 }
 
+export function addDays(ymd: string, n: number): string {
+  const [y, m, d] = ymd.split('-').map(Number)
+  const date = new Date(Date.UTC(y, m - 1, d))
+  date.setUTCDate(date.getUTCDate() + n)
+  return date.toISOString().slice(0, 10)
+}
+
 // Convert an Amsterdam wall-clock string (datetime-local input value) into
 // a UTC ISO instant. DST-aware via Intl.
 export function amsterdamWallClockToUtcIso(local: string): string {

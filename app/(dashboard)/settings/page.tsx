@@ -364,6 +364,21 @@ export default async function SettingsPage({
     <div className="space-y-10 max-w-2xl p-6">
       <h1 className="text-2xl font-semibold text-ink">Settings</h1>
 
+      <section className="space-y-2">
+        <h2 className="text-lg font-semibold text-ink">Marathon plan</h2>
+        <p className="text-sm text-muted">
+          23-week progression (Mon 2026-05-25 → marathon Sun 2026-11-01). Targets per session
+          derive from your current data, not a goal time. The dashboard materialises 4 weeks
+          ahead at a time; a weekly cron extends the window.
+        </p>
+        <a
+          href="/settings/plan"
+          className="inline-block rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm hover:border-border-2"
+        >
+          Open plan →
+        </a>
+      </section>
+
       <section className="space-y-3">
         <h2 className="text-lg font-semibold text-ink">Goals</h2>
         <p className="text-sm text-muted">
