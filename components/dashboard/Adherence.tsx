@@ -2,14 +2,12 @@ export interface AdherenceProps {
   completed: number
   skipped: number
   missed: number // planned + past + not completed
-  upcomingPlanned: number // planned + future
 }
 
 export function Adherence({
   completed,
   skipped,
   missed,
-  upcomingPlanned,
 }: AdherenceProps) {
   // Adherence = completed / (planned-and-past). Skipped counts as "didn't do
   // it" same as missed, just marked deliberately.
@@ -28,7 +26,7 @@ export function Adherence({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4">
+      <div className="grid grid-cols-3">
         <div className="px-4 py-3 border-r border-border">
           <div className="text-[10px] uppercase tracking-[0.1em] text-muted mb-1">Adherence</div>
           <div className="font-mono text-[24px] -tracking-[0.01em] text-ink leading-none">
@@ -45,7 +43,7 @@ export function Adherence({
           </div>
           <div className="text-[10px] text-muted mt-1">sessions done</div>
         </div>
-        <div className="px-4 py-3 border-r border-border">
+        <div className="px-4 py-3">
           <div className="text-[10px] uppercase tracking-[0.1em] text-muted mb-1">Missed</div>
           <div className="font-mono text-[24px] -tracking-[0.01em] text-warn leading-none">
             {missed}
@@ -53,13 +51,6 @@ export function Adherence({
           <div className="text-[10px] text-muted mt-1">
             {skipped > 0 ? `${skipped} marked skipped` : 'planned but undone'}
           </div>
-        </div>
-        <div className="px-4 py-3">
-          <div className="text-[10px] uppercase tracking-[0.1em] text-muted mb-1">Upcoming</div>
-          <div className="font-mono text-[24px] -tracking-[0.01em] text-ink leading-none">
-            {upcomingPlanned}
-          </div>
-          <div className="text-[10px] text-muted mt-1">still ahead</div>
         </div>
       </div>
     </section>

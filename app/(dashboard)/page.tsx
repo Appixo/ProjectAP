@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/auth/owner'
 import { DashboardHeader } from '@/components/dashboard/Header'
 import { DailyLogCard } from '@/components/dashboard/DailyLogCard'
 import { SessionLogPicker } from '@/components/dashboard/SessionLogPicker'
@@ -15,7 +15,6 @@ import {
   type WeekStripSession,
   type SessionDescription,
 } from '@/components/dashboard/WeekStrip'
-import { UpcomingWeeks } from '@/components/dashboard/UpcomingWeeks'
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
 import { Adherence } from '@/components/dashboard/Adherence'
 import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
@@ -114,7 +113,7 @@ function formatWeekLabel(mondayYmd: string, planWeek?: number): string {
 }
 
 export default async function DashboardPage() {
-  const supabase = await createSupabaseServerClient()
+  const { supabase, user } = await requireOwner()
   const now = new Date()
   const todayYmd = ymdInAmsterdam(now)
   const todayMonday = todayMondayInAmsterdam()
@@ -127,7 +126,6 @@ export default async function DashboardPage() {
   )
 
   const nextMondayYmd = addWeeks(todayMonday, 1)
-  const upcomingHorizonMonday = addWeeks(todayMonday, 4) // 3 weeks ahead end
   const adherenceWindowStartIso = new Date(
     now.getTime() - 14 * 86400 * 1000,
   ).toISOString()
@@ -140,9 +138,7 @@ export default async function DashboardPage() {
   const nextWeekStartIso = new Date(
     nextMondayYmd + 'T00:00:00Z',
   ).toISOString()
-  const upcomingHorizonIso = new Date(
-    upcomingHorizonMonday + 'T00:00:00Z',
-  ).toISOString()
+  const nowIso = now.toISOString()
 
   const [
     { data: rawActivities },
@@ -152,7 +148,6 @@ export default async function DashboardPage() {
     { data: lastWeekLogs },
     { data: thisWeekSessionsRaw },
     { data: lastWeekSessionsRaw },
-    { data: upcomingSessionsRaw },
     { data: adherenceSessionsRaw },
     { data: goalsRaw },
   ] = await Promise.all([
@@ -161,6 +156,7 @@ export default async function DashboardPage() {
       .select(
         'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
       )
+      .eq('user_id', user.id)
       .eq('type', 'Run')
       .gte('start_at', sinceIso)
       .order('start_at', { ascending: true })
@@ -170,6 +166,7 @@ export default async function DashboardPage() {
     supabase
       .from('activities')
       .select('id, start_at, distance_m, moving_time_s, type, source')
+      .eq('user_id', user.id)
       .eq('type', 'Run')
       .order('start_at', { ascending: false })
       .returns<
@@ -187,6 +184,7 @@ export default async function DashboardPage() {
     supabase
       .from('personal_bests')
       .select('distance_m, time_s, achieved_at, activity_id, source, event_name')
+      .eq('user_id', user.id)
       .order('distance_m', { ascending: true })
       .order('time_s', { ascending: true })
       .returns<
@@ -202,6 +200,7 @@ export default async function DashboardPage() {
     supabase
       .from('daily_log')
       .select('log_date, sleep_hours')
+      .eq('user_id', user.id)
       .gte('log_date', sleepCutoffYmd)
       .order('log_date', { ascending: true })
       .returns<{ log_date: string; sleep_hours: number | null }[]>(),
@@ -210,17 +209,22 @@ export default async function DashboardPage() {
       .select(
         'log_date, sleep_hours, sleep_score, energy, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
       )
+      .eq('user_id', user.id)
       .gte('log_date', lastWeekMonday)
       .lt('log_date', todayMonday)
       .order('log_date', { ascending: true })
       .returns<RawDailyLog[]>(),
+    // Only sessions that have already occurred (session_at <= now) — the
+    // dashboard shows logs, not future plans.
     supabase
       .from('training_sessions')
       .select(
         'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
+      .eq('user_id', user.id)
       .gte('session_at', thisWeekStartIso)
       .lt('session_at', nextWeekStartIso)
+      .lte('session_at', nowIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
     supabase
@@ -228,33 +232,26 @@ export default async function DashboardPage() {
       .select(
         'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
+      .eq('user_id', user.id)
       .gte('session_at', lastWeekStartIso)
       .lt('session_at', thisWeekStartIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
-    supabase
-      .from('training_sessions')
-      .select(
-        'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
-      )
-      .gte('session_at', nextWeekStartIso)
-      .lt('session_at', upcomingHorizonIso)
-      .order('session_at', { ascending: true })
-      .returns<RawSession[]>(),
     // Adherence window: all sessions in the last 14 days, regardless of
-    // status, plus any planned sessions in the next 14 days for the
-    // "upcoming" count.
+    // status. Future sessions are excluded — the dashboard is logs-only.
     supabase
       .from('training_sessions')
       .select('id, session_at, status')
+      .eq('user_id', user.id)
       .gte('session_at', adherenceWindowStartIso)
-      .lt('session_at', new Date(now.getTime() + 14 * 86400 * 1000).toISOString())
+      .lte('session_at', nowIso)
       .returns<{ id: string; session_at: string; status: string | null }[]>(),
     supabase
       .from('goals')
       .select(
         'primary_goal, primary_event_date, secondary_goal, secondary_event_date, secondary_kind, notes',
       )
+      .eq('user_id', user.id)
       .maybeSingle<RawGoals>(),
   ])
 
@@ -412,23 +409,15 @@ export default async function DashboardPage() {
   const thisWeekSessions = thisWeekSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
 
-  // Adherence in the last 14 days. Past planned-but-not-completed = missed.
+  // Adherence in the last 14 days. Planned-but-not-completed = missed.
   let completed = 0
   let skipped = 0
   let missed = 0
-  let upcomingPlanned = 0
-  const nowMs = now.getTime()
   for (const s of adherenceSessionsRaw ?? []) {
-    const sessionMs = new Date(s.session_at).getTime()
-    const isPast = sessionMs <= nowMs
     const status = s.status ?? 'completed'
-    if (isPast) {
-      if (status === 'completed') completed += 1
-      else if (status === 'skipped') skipped += 1
-      else if (status === 'planned') missed += 1
-    } else {
-      if (status === 'planned') upcomingPlanned += 1
-    }
+    if (status === 'completed') completed += 1
+    else if (status === 'skipped') skipped += 1
+    else if (status === 'planned') missed += 1
   }
 
   // Personal bests computed across all-time runs. bestEfforts() accepts the
@@ -457,20 +446,6 @@ export default async function DashboardPage() {
     })),
     manualPbList,
   )
-  const upcomingSessions: WeekStripSession[] = (upcomingSessionsRaw ?? [])
-    .filter(s => (s.status ?? 'completed') !== 'skipped')
-    .map(s => ({
-      id: s.id,
-      session_at_local: s.session_at_local,
-      modality: s.modality,
-      duration_min: s.duration_min,
-      rpe: s.rpe,
-      status: s.status,
-      description: s.description,
-      format: s.format,
-      notes: s.notes,
-    }))
-
   // Dedup planned-run matches: when a session has matched_activity_id set,
   // hide that activity from the runs strip (the session already represents
   // it) and attach the run's actuals to the session for the popover.
@@ -556,7 +531,6 @@ export default async function DashboardPage() {
         completed={completed}
         skipped={skipped}
         missed={missed}
-        upcomingPlanned={upcomingPlanned}
       />
 
       {/* this week — cross-modal day grid */}
@@ -567,17 +541,6 @@ export default async function DashboardPage() {
         runs={stripRuns}
         sessions={stripSessions}
       />
-
-      {/* next 3 weeks — planned workouts */}
-      {upcomingSessions.length > 0 && (
-        <UpcomingWeeks
-          thisMonday={todayMonday}
-          todayYmd={todayYmd}
-          sessions={upcomingSessions}
-          planWeekStart={plan.weekNumber}
-          totalPlanWeeks={plan.totalWeeks}
-        />
-      )}
 
       {/* week review */}
       <WeekReview

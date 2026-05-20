@@ -1,8 +1,7 @@
 import { createHash } from 'crypto'
 import type { NextRequest } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
-import { isAllowedEmail } from '@/lib/auth/allowlist'
+import { getOwnerUserId } from '@/lib/auth/owner'
 
 export interface ApiAuth {
   userId: string
@@ -11,12 +10,10 @@ export interface ApiAuth {
   rawToken: string | null
 }
 
-// Resolve API auth from EITHER a ?token= query param OR the Supabase session
-// cookie. Returns null when neither resolves to an allowed user.
-//
-// Token path: matches export_tokens by sha256(raw). can_write read from row.
-// Session path: requires a logged-in user whose email passes the allowlist.
-// can_write is implicitly true (the user is themselves, no scope to narrow).
+// Resolve API auth from EITHER a ?token= query param OR fall back to the
+// single owner identity. The dashboard is unauthenticated — see
+// lib/auth/owner.ts. Token path still exists so existing read+write tokens
+// keep working from external callers.
 export async function resolveApiAuth(
   request: NextRequest,
 ): Promise<ApiAuth | null> {
@@ -44,13 +41,9 @@ export async function resolveApiAuth(
     }
   }
 
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user || !isAllowedEmail(user.email)) return null
+  const userId = await getOwnerUserId()
   return {
-    userId: user.id,
+    userId,
     canWrite: true,
     source: 'session',
     rawToken: null,

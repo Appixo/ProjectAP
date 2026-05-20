@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/auth/owner'
 import {
   amsterdamWallClockToUtcIso,
   nowAmsterdamLocalForInput,
@@ -62,11 +62,7 @@ function numericOrNull(value: FormDataEntryValue | null): number | null {
 
 async function saveLog(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const logDate = String(formData.get('log_date') ?? '').trim()
   if (!logDate) redirect('/log?error=missing_date')
@@ -99,11 +95,7 @@ async function saveLog(formData: FormData) {
 
 async function addSession(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const sessionAtLocal = String(formData.get('session_at_local') ?? '').trim()
   const modality = String(formData.get('modality') ?? '').trim()
@@ -141,11 +133,7 @@ async function addSession(formData: FormData) {
 
 async function deleteSession(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const id = String(formData.get('id') ?? '').trim()
   if (!id) redirect('/log')
@@ -186,11 +174,7 @@ export default async function LogPage({
   }>
 }) {
   const sp = await searchParams
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const todayYmd = todayInAmsterdam()
   const date = sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date) ? sp.date : todayYmd

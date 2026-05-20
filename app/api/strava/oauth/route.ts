@@ -1,7 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { cookies } from 'next/headers'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
-import { createSupabaseAdminClient } from '@/lib/supabase/admin'
+import { requireOwner } from '@/lib/auth/owner'
 import { exchangeCodeForToken } from '@/lib/strava/client'
 import { resyncWindow, type StravaAccountRow } from '@/lib/strava/sync'
 
@@ -33,13 +32,7 @@ export async function GET(request: NextRequest) {
     return redirectToSettings(request, { strava_error: 'state_mismatch' })
   }
 
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.redirect(new URL('/login', request.url))
-  }
+  const { supabase, user } = await requireOwner()
 
   let token
   try {
@@ -68,10 +61,9 @@ export async function GET(request: NextRequest) {
   // Fire-and-finish: backfill the last 365 days. Inline so we don't return
   // before it finishes — the user expects activities to be ready on /. Wrap
   // in try/catch so a backfill blip doesn't fail the OAuth round-trip.
-  const admin = createSupabaseAdminClient()
   let backfilled = 0
   try {
-    backfilled = await resyncWindow(admin, accountRow, 365)
+    backfilled = await resyncWindow(supabase, accountRow, 365)
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'unknown'
     return redirectToSettings(request, {

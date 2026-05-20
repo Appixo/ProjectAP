@@ -1,6 +1,5 @@
 import { revalidatePath } from 'next/cache'
-import { redirect } from 'next/navigation'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/auth/owner'
 import { todayInAmsterdam } from '@/lib/time/week'
 
 interface DailyLogRow {
@@ -26,11 +25,7 @@ function numericOrNull(value: FormDataEntryValue | null): number | null {
 
 async function saveTodayLog(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const logDate = String(formData.get('log_date') ?? '').trim()
   if (!logDate) return
@@ -65,11 +60,7 @@ const HABITS = [
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 export async function DailyLogCard() {
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return null
+  const { supabase, user } = await requireOwner()
 
   const today = todayInAmsterdam()
   const { data: existing } = await supabase

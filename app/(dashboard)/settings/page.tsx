@@ -2,7 +2,7 @@ import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { createHash, randomBytes } from 'crypto'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/auth/owner'
 import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 import { getAccountByAthlete, resyncWindow } from '@/lib/strava/sync'
 
@@ -73,22 +73,14 @@ async function connectStrava() {
 
 async function disconnectStrava() {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) return
+  const { supabase, user } = await requireOwner()
   await supabase.from('strava_account').delete().eq('user_id', user.id)
   redirect('/settings?disconnected=1')
 }
 
 async function createExportToken(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const labelRaw = String(formData.get('label') ?? '').trim()
   const label = labelRaw.slice(0, 60) || 'export'
@@ -123,11 +115,7 @@ async function createExportToken(formData: FormData) {
 
 async function resyncRecent(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const daysRaw = Number(formData.get('days') ?? 7)
   const days = Number.isFinite(daysRaw)
@@ -166,11 +154,7 @@ async function resyncRecent(formData: FormData) {
 
 async function saveGoals(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const dateOrNull = (raw: FormDataEntryValue | null): string | null => {
     const s = String(raw ?? '').trim()
@@ -207,11 +191,7 @@ async function saveGoals(formData: FormData) {
 
 async function addPersonalBest(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const distance = Number(formData.get('distance_m'))
   const hours = Number(formData.get('time_h') || 0)
@@ -252,11 +232,7 @@ async function addPersonalBest(formData: FormData) {
 
 async function deletePersonalBest(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
   const id = String(formData.get('id') ?? '')
   if (!id) redirect('/settings')
   await supabase.from('personal_bests').delete().eq('user_id', user.id).eq('id', id)
@@ -267,11 +243,7 @@ async function deletePersonalBest(formData: FormData) {
 
 async function revokeExportToken(formData: FormData) {
   'use server'
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const hash = String(formData.get('token_hash') ?? '')
   if (!hash) redirect('/settings')
@@ -316,11 +288,7 @@ export default async function SettingsPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>
 }) {
   const sp = await searchParams
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const { data: account } = await supabase
     .from('strava_account')

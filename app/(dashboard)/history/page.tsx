@@ -1,5 +1,4 @@
-import { redirect } from 'next/navigation'
-import { createSupabaseServerClient } from '@/lib/supabase/server'
+import { requireOwner } from '@/lib/auth/owner'
 import { ymdInAmsterdam } from '@/lib/time/week'
 
 interface ActivityRow {
@@ -65,17 +64,14 @@ export default async function HistoryPage({
   searchParams: Promise<{ year?: string; month?: string }>
 }) {
   const sp = await searchParams
-  const supabase = await createSupabaseServerClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
+  const { supabase, user } = await requireOwner()
 
   const { data: activitiesRaw } = await supabase
     .from('activities')
     .select(
       'id, start_at, distance_m, moving_time_s, type, average_heartrate',
     )
+    .eq('user_id', user.id)
     .eq('type', 'Run')
     .order('start_at', { ascending: false })
     .returns<ActivityRow[]>()
