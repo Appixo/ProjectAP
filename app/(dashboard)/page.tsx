@@ -112,11 +112,25 @@ function formatWeekLabel(mondayYmd: string, planWeek?: number): string {
   return planWeek ? `${range} · week ${planWeek}` : range
 }
 
-export default async function DashboardPage() {
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ weekMonday?: string }>
+}) {
+  const sp = await searchParams
   const { supabase, user } = await requireOwner()
   const now = new Date()
   const todayYmd = ymdInAmsterdam(now)
   const todayMonday = todayMondayInAmsterdam()
+  // Browse-able strip week: ?weekMonday=YYYY-MM-DD, falls back to today's
+  // Monday. Validated against a YMD shape AND realigned to the closest
+  // Monday-on-or-before — protects against arbitrary date params landing
+  // mid-week and producing a Mon-Sun window offset from the real week.
+  const requestedWeek =
+    typeof sp.weekMonday === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(sp.weekMonday)
+      ? sp.weekMonday
+      : todayMonday
+  const stripMonday = mondayOfYmd(requestedWeek)
   const lastWeekMonday = addWeeks(todayMonday, -1)
   const sixteenWeeksAgoMonday = addWeeks(todayMonday, -(WEEKS_FOR_MILEAGE - 1))
   const sinceIso = new Date(sixteenWeeksAgoMonday + 'T00:00:00Z').toISOString()
@@ -125,7 +139,6 @@ export default async function DashboardPage() {
     new Date(now.getTime() - DAYS_FOR_SLEEP * 86400 * 1000),
   )
 
-  const nextMondayYmd = addWeeks(todayMonday, 1)
   const adherenceWindowStartIso = new Date(
     now.getTime() - 14 * 86400 * 1000,
   ).toISOString()
@@ -135,8 +148,9 @@ export default async function DashboardPage() {
   const thisWeekStartIso = new Date(
     todayMonday + 'T00:00:00Z',
   ).toISOString()
-  const nextWeekStartIso = new Date(
-    nextMondayYmd + 'T00:00:00Z',
+  const stripStartIso = new Date(stripMonday + 'T00:00:00Z').toISOString()
+  const stripEndIso = new Date(
+    addWeeks(stripMonday, 1) + 'T00:00:00Z',
   ).toISOString()
   const nowIso = now.toISOString()
 
@@ -146,7 +160,7 @@ export default async function DashboardPage() {
     { data: manualPbs },
     { data: sleepLogs },
     { data: lastWeekLogs },
-    { data: thisWeekSessionsRaw },
+    { data: stripSessionsRaw },
     { data: lastWeekSessionsRaw },
     { data: adherenceSessionsRaw },
     { data: goalsRaw },
@@ -214,17 +228,16 @@ export default async function DashboardPage() {
       .lt('log_date', todayMonday)
       .order('log_date', { ascending: true })
       .returns<RawDailyLog[]>(),
-    // Only sessions that have already occurred (session_at <= now) — the
-    // dashboard shows logs, not future plans.
+    // Sessions for the browse-able strip week. Includes future planned rows
+    // so the user can see upcoming sessions when they navigate ahead.
     supabase
       .from('training_sessions')
       .select(
         'id, session_at, session_at_local, modality, duration_min, rpe, status, description, format, notes, matched_activity_id',
       )
       .eq('user_id', user.id)
-      .gte('session_at', thisWeekStartIso)
-      .lt('session_at', nextWeekStartIso)
-      .lte('session_at', nowIso)
+      .gte('session_at', stripStartIso)
+      .lt('session_at', stripEndIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
     supabase
@@ -275,6 +288,12 @@ export default async function DashboardPage() {
   )
   const lastWeekRuns = enriched.filter(
     a => mondayOfYmd(ymdInAmsterdam(new Date(a.start_at))) === lastWeekMonday,
+  )
+  // Strip week's runs — independent of "this week" so the user can browse
+  // forward/back without disturbing RunsTable / WeekReview / charts which
+  // stay anchored to today.
+  const stripWeekRuns = enriched.filter(
+    a => mondayOfYmd(ymdInAmsterdam(new Date(a.start_at))) === stripMonday,
   )
 
   // Weekly mileage — 16 weeks
@@ -361,6 +380,17 @@ export default async function DashboardPage() {
   const plan = planContext(now)
   const weekLabelReview = formatWeekLabel(lastWeekMonday, Math.max(1, plan.weekNumber - 1))
   const weekLabelThisWeek = formatWeekLabel(todayMonday, plan.weekNumber)
+  // Strip label: include the in-code plan week number only when the strip
+  // is anchored to the current week; for browsed weeks just show the date
+  // range, since plan.weekNumber is computed relative to today not stripMonday.
+  const stripIsToday = stripMonday === todayMonday
+  const stripWeekLabel = stripIsToday
+    ? weekLabelThisWeek
+    : formatWeekLabel(stripMonday)
+  const stripTitle = stripIsToday ? 'This week' : 'Week'
+  const stripPrevHref = `/?weekMonday=${addWeeks(stripMonday, -1)}`
+  const stripNextHref = `/?weekMonday=${addWeeks(stripMonday, 1)}`
+  const stripTodayHref = stripIsToday ? null : `/`
 
   const runRows: RunRow[] = thisWeekRuns
     .slice()
@@ -406,7 +436,7 @@ export default async function DashboardPage() {
     habit_in_bed_on_time: l.habit_in_bed_on_time,
   }))
 
-  const thisWeekSessions = thisWeekSessionsRaw ?? []
+  const stripSessionsList = stripSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
 
   // Adherence in the last 14 days. Planned-but-not-completed = missed.
@@ -450,13 +480,13 @@ export default async function DashboardPage() {
   // hide that activity from the runs strip (the session already represents
   // it) and attach the run's actuals to the session for the popover.
   const matchedActivityIds = new Set(
-    thisWeekSessions
+    stripSessionsList
       .filter(s => s.matched_activity_id != null)
       .map(s => s.matched_activity_id as number),
   )
-  const runById = new Map(thisWeekRuns.map(r => [r.id, r]))
+  const runById = new Map(stripWeekRuns.map(r => [r.id, r]))
 
-  const stripRuns: WeekStripRun[] = thisWeekRuns
+  const stripRuns: WeekStripRun[] = stripWeekRuns
     .filter(r => !matchedActivityIds.has(r.id))
     .map(r => ({
       id: r.id,
@@ -465,7 +495,7 @@ export default async function DashboardPage() {
       moving_time_s: r.moving_time_s,
       runType: r.runType,
     }))
-  const stripSessions: WeekStripSession[] = thisWeekSessions
+  const stripSessions: WeekStripSession[] = stripSessionsList
     .filter(s => (s.status ?? 'completed') !== 'skipped')
     .map(s => {
       const matched =
@@ -533,13 +563,17 @@ export default async function DashboardPage() {
         missed={missed}
       />
 
-      {/* this week — cross-modal day grid */}
+      {/* strip — cross-modal day grid; browse-able via ?weekMonday */}
       <WeekStrip
-        weekLabel={weekLabelThisWeek}
-        monday={todayMonday}
+        title={stripTitle}
+        weekLabel={stripWeekLabel}
+        monday={stripMonday}
         todayYmd={todayYmd}
         runs={stripRuns}
         sessions={stripSessions}
+        prevHref={stripPrevHref}
+        nextHref={stripNextHref}
+        todayHref={stripTodayHref}
       />
 
       {/* week review */}

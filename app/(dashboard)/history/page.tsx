@@ -1,5 +1,6 @@
 import { requireOwner } from '@/lib/auth/owner'
 import { ymdInAmsterdam } from '@/lib/time/week'
+import { YearHeatmap, type HeatmapDay } from '@/components/dashboard/YearHeatmap'
 
 interface ActivityRow {
   id: number
@@ -8,6 +9,31 @@ interface ActivityRow {
   moving_time_s: number
   type: string
   average_heartrate: number | null
+}
+
+interface SessionRow {
+  session_at: string
+  session_at_local: string
+  modality: string
+  duration_min: number | null
+}
+
+const MODALITY_HUMAN: Record<string, string> = {
+  strength_upper: 'upper',
+  strength_lower: 'lower',
+  strength_full: 'full',
+  football: 'football',
+  cycling: 'cycling',
+  swimming: 'swimming',
+  mobility: 'mobility',
+  run_easy: 'easy',
+  run_tempo: 'tempo',
+  run_long: 'long',
+  run_threshold: 'threshold',
+  run_vo2: 'vo2',
+  run_race: 'race',
+  run_recovery: 'recovery',
+  other: 'other',
 }
 
 interface MonthBucket {
@@ -43,6 +69,69 @@ function monthLabel(ymd: string): string {
   })
 }
 
+function buildHeatmapDays(
+  activities: { start_at: string; distance_m: number; moving_time_s: number; type: string }[],
+  sessions: SessionRow[],
+): HeatmapDay[] {
+  // Aggregate by Amsterdam YMD. Activities contribute moving_time_s (incl.
+  // non-run types like Workout/football synced via Strava). Sessions
+  // contribute duration_min ONLY when they are not run-modality (the run
+  // already appears as an activity) — this is the safe-against-double-count
+  // rule for the common case.
+  const byDay = new Map<
+    string,
+    { totalMin: number; parts: string[] }
+  >()
+
+  const ensure = (ymd: string) => {
+    let cur = byDay.get(ymd)
+    if (!cur) {
+      cur = { totalMin: 0, parts: [] }
+      byDay.set(ymd, cur)
+    }
+    return cur
+  }
+
+  for (const a of activities) {
+    const ymd = ymdInAmsterdam(new Date(a.start_at))
+    const min = Math.round(a.moving_time_s / 60)
+    const cell = ensure(ymd)
+    cell.totalMin += min
+    if (a.type === 'Run') {
+      cell.parts.push(`${(a.distance_m / 1000).toFixed(1)} km run`)
+    } else {
+      cell.parts.push(`${min} min ${a.type.toLowerCase()}`)
+    }
+  }
+
+  for (const s of sessions) {
+    if (!s.duration_min) continue
+    if (s.modality.startsWith('run_')) continue // run already covered by activities
+    const ymd = s.session_at_local.slice(0, 10)
+    const cell = ensure(ymd)
+    cell.totalMin += s.duration_min
+    cell.parts.push(`${s.duration_min} min ${MODALITY_HUMAN[s.modality] ?? s.modality}`)
+  }
+
+  // Build the rolling 365-day window ending today. Empty days are still
+  // emitted so the heatmap grid has every cell.
+  const today = ymdInAmsterdam(new Date())
+  const out: HeatmapDay[] = []
+  for (let i = 364; i >= 0; i--) {
+    const d = new Date()
+    d.setUTCDate(d.getUTCDate() - i)
+    const ymd = ymdInAmsterdam(d)
+    const cell = byDay.get(ymd)
+    out.push({
+      ymd,
+      totalMin: cell?.totalMin ?? 0,
+      breakdown: cell?.parts.join(' + ') ?? '',
+    })
+    if (ymd === today) break
+  }
+  return out
+}
+
 function formatDuration(seconds: number): string {
   const h = Math.floor(seconds / 3600)
   const m = Math.floor((seconds % 3600) / 60)
@@ -66,17 +155,43 @@ export default async function HistoryPage({
   const sp = await searchParams
   const { supabase, user } = await requireOwner()
 
-  const { data: activitiesRaw } = await supabase
-    .from('activities')
-    .select(
-      'id, start_at, distance_m, moving_time_s, type, average_heartrate',
-    )
-    .eq('user_id', user.id)
-    .eq('type', 'Run')
-    .order('start_at', { ascending: false })
-    .returns<ActivityRow[]>()
+  // Last 365 days for the heatmap. Pull every Run AND every training_session
+  // with a duration_min so the cell intensity counts all modalities.
+  const heatmapStartIso = new Date(
+    Date.now() - 364 * 86400 * 1000,
+  ).toISOString()
+
+  const [
+    { data: activitiesRaw },
+    { data: yearActivitiesRaw },
+    { data: yearSessionsRaw },
+  ] = await Promise.all([
+    supabase
+      .from('activities')
+      .select(
+        'id, start_at, distance_m, moving_time_s, type, average_heartrate',
+      )
+      .eq('user_id', user.id)
+      .eq('type', 'Run')
+      .order('start_at', { ascending: false })
+      .returns<ActivityRow[]>(),
+    supabase
+      .from('activities')
+      .select('start_at, distance_m, moving_time_s, type')
+      .eq('user_id', user.id)
+      .gte('start_at', heatmapStartIso)
+      .returns<{ start_at: string; distance_m: number; moving_time_s: number; type: string }[]>(),
+    supabase
+      .from('training_sessions')
+      .select('session_at, session_at_local, modality, duration_min')
+      .eq('user_id', user.id)
+      .gte('session_at', heatmapStartIso)
+      .neq('status', 'planned')
+      .returns<SessionRow[]>(),
+  ])
 
   const activities = activitiesRaw ?? []
+  const heatmapDays = buildHeatmapDays(yearActivitiesRaw ?? [], yearSessionsRaw ?? [])
 
   // Bucket per Amsterdam-local month.
   const monthMap = new Map<string, MonthBucket>()
@@ -151,6 +266,8 @@ export default async function HistoryPage({
           ← dashboard
         </a>
       </header>
+
+      <YearHeatmap days={heatmapDays} />
 
       <section className="card bg-panel border border-border rounded-[4px]">
         <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border">

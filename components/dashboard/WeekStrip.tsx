@@ -43,6 +43,10 @@ export interface WeekStripProps {
   runs: WeekStripRun[]
   sessions: WeekStripSession[]
   title?: string
+  prevHref?: string
+  nextHref?: string
+  /** null when the strip already shows the current week. */
+  todayHref?: string | null
 }
 
 interface DayItem {
@@ -238,6 +242,9 @@ export function WeekStrip({
   runs,
   sessions,
   title = 'This week',
+  prevHref,
+  nextHref,
+  todayHref,
 }: WeekStripProps) {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -328,13 +335,45 @@ export function WeekStrip({
       ref={containerRef}
       className="card bg-panel border border-border rounded-[4px] mb-4 relative"
     >
-      <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border">
-        <h2 className="m-0 text-[11px] uppercase tracking-[0.1em] text-ink-2 font-semibold">
-          {title}
-        </h2>
-        <span className="font-mono text-[11px] text-muted -tracking-[0.01em]">
-          {weekLabel}
-        </span>
+      <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border gap-3">
+        <div className="flex items-baseline gap-3 min-w-0">
+          <h2 className="m-0 text-[11px] uppercase tracking-[0.1em] text-ink-2 font-semibold shrink-0">
+            {title}
+          </h2>
+          <span className="font-mono text-[11px] text-muted -tracking-[0.01em] truncate">
+            {weekLabel}
+          </span>
+        </div>
+        {(prevHref || nextHref) && (
+          <nav className="flex items-center gap-1 shrink-0" aria-label="Week navigation">
+            {prevHref && (
+              <a
+                href={prevHref}
+                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
+                aria-label="Previous week"
+              >
+                ← prev
+              </a>
+            )}
+            {todayHref && (
+              <a
+                href={todayHref}
+                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
+              >
+                today
+              </a>
+            )}
+            {nextHref && (
+              <a
+                href={nextHref}
+                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
+                aria-label="Next week"
+              >
+                next →
+              </a>
+            )}
+          </nav>
+        )}
       </div>
 
       <div className="grid grid-cols-7">
