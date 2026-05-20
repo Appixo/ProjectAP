@@ -25,11 +25,13 @@ import { LongestRun, type LongestDatum } from '@/components/charts/LongestRun'
 import { PaceTrend, type PaceDatum } from '@/components/charts/PaceTrend'
 import { Sleep, type SleepDatum } from '@/components/charts/Sleep'
 import { YearHeatmap } from '@/components/dashboard/YearHeatmap'
+import { TodayLine, type TodayLineSession, type TodayLineWellness } from '@/components/dashboard/TodayLine'
 import { buildHeatmapDays, type HeatmapActivity, type HeatmapSession } from '@/lib/heatmap/build'
 import { classifyRuns, formatPace } from '@/lib/run/classify'
 import { pctChange, sumKm, weeklyBuckets } from '@/lib/run/aggregate'
 import { planContext } from '@/lib/time/race'
 import {
+  addDays,
   addWeeks,
   mondayOfYmd,
   todayMondayInAmsterdam,
@@ -161,6 +163,8 @@ export default async function DashboardPage({
     { data: goalsRaw },
     { data: heatmapActivitiesRaw },
     { data: heatmapSessionsRaw },
+    { data: wellness8d },
+    { data: todaySessions },
   ] = await Promise.all([
     supabase
       .from('activities')
@@ -278,6 +282,45 @@ export default async function DashboardPage({
       .gte('session_at', heatmapStartIso)
       .neq('status', 'planned')
       .returns<HeatmapSession[]>(),
+    // Last 8 days of wellness (today + 7 prior) for the TodayLine card.
+    // Small payload; the 7-day averages exclude today to compute deltas.
+    supabase
+      .from('daily_log')
+      .select('log_date, sleep_hours, morning_rhr_bpm, hrv_ms, mood_1_5')
+      .eq('user_id', user.id)
+      .gte('log_date', addDays(todayYmd, -7))
+      .lte('log_date', todayYmd)
+      .order('log_date', { ascending: false })
+      .returns<
+        {
+          log_date: string
+          sleep_hours: number | null
+          morning_rhr_bpm: number | null
+          hrv_ms: number | null
+          mood_1_5: number | null
+        }[]
+      >(),
+    // Today's planned/completed sessions for the TodayLine "what's planned"
+    // surface — stays anchored to today even when the strip browses away.
+    supabase
+      .from('training_sessions')
+      .select('modality, status, description')
+      .eq('user_id', user.id)
+      .gte('session_at_local', todayYmd + 'T00:00:00')
+      .lt('session_at_local', addDays(todayYmd, 1) + 'T00:00:00')
+      .order('session_at_local', { ascending: true })
+      .returns<
+        {
+          modality: string
+          status: 'planned' | 'completed' | 'skipped' | null
+          description: {
+            target_distance_km?: number
+            target_duration_min?: number
+            target_hr_min?: number
+            target_hr_max?: number
+          } | null
+        }[]
+      >(),
   ])
 
   const activities = rawActivities ?? []
@@ -520,9 +563,70 @@ export default async function DashboardPage({
     heatmapSessionsRaw ?? [],
   )
 
+  // TodayLine: prefer today's wellness row; fall back to the most recent
+  // prior day that has any data. Deltas compare today's RHR/HRV against the
+  // 7-day average excluding today.
+  const wellnessRows = wellness8d ?? []
+  const todayWellnessRow = wellnessRows.find(r => r.log_date === todayYmd) ?? null
+  const wellnessRow =
+    todayWellnessRow ??
+    wellnessRows.find(
+      r =>
+        r.sleep_hours != null ||
+        r.morning_rhr_bpm != null ||
+        r.hrv_ms != null ||
+        r.mood_1_5 != null,
+    ) ??
+    null
+
+  const priorRows = wellnessRows.filter(r => r.log_date !== todayYmd)
+  const rhrSamples = priorRows
+    .map(r => r.morning_rhr_bpm)
+    .filter((v): v is number => v != null)
+  const hrvSamples = priorRows
+    .map(r => r.hrv_ms)
+    .filter((v): v is number => v != null)
+  const rhrAvg7d =
+    rhrSamples.length >= 3
+      ? rhrSamples.reduce((s, n) => s + n, 0) / rhrSamples.length
+      : null
+  const hrvAvg7d =
+    hrvSamples.length >= 3
+      ? hrvSamples.reduce((s, n) => s + n, 0) / hrvSamples.length
+      : null
+
+  const todayLineWellness: TodayLineWellness | null = wellnessRow
+    ? {
+        sleep_hours: wellnessRow.sleep_hours,
+        morning_rhr_bpm: wellnessRow.morning_rhr_bpm,
+        hrv_ms: wellnessRow.hrv_ms,
+        mood_1_5: wellnessRow.mood_1_5,
+      }
+    : null
+
+  const todayLineSessions: TodayLineSession[] = (todaySessions ?? [])
+    .filter(s => (s.status ?? 'completed') !== 'skipped')
+    .map(s => ({
+      modality: s.modality,
+      target_distance_km: s.description?.target_distance_km ?? null,
+      target_duration_min: s.description?.target_duration_min ?? null,
+      target_hr_min: s.description?.target_hr_min ?? null,
+      target_hr_max: s.description?.target_hr_max ?? null,
+      status: s.status,
+    }))
+
   return (
     <div className="max-w-[1200px] mx-auto px-7 pt-8 pb-20">
       <DashboardHeader />
+
+      {/* today: one-line glance of "what's planned" + "how I feel" */}
+      <TodayLine
+        todayYmd={todayYmd}
+        sessions={todayLineSessions}
+        wellness={todayLineWellness}
+        wellnessYmd={wellnessRow?.log_date ?? null}
+        deltas={{ rhrAvg7d, hrvAvg7d }}
+      />
 
       {/* year heatmap — glance-view of training across the last 365 days */}
       <div className="mb-4">

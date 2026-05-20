@@ -11,6 +11,14 @@ interface DailyLogRow {
   user_id: string
   log_date: string
   sleep_hours: number | null
+  sleep_quality_1_5: number | null
+  bedtime: string | null
+  wake_time: string | null
+  morning_rhr_bpm: number | null
+  hrv_ms: number | null
+  body_weight_kg: number | null
+  mood_1_5: number | null
+  stress_1_5: number | null
   sleep_score: number | null
   energy: number | null
   habit_strength_done: boolean
@@ -60,6 +68,13 @@ function numericOrNull(value: FormDataEntryValue | null): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+function timeOrNull(value: FormDataEntryValue | null): string | null {
+  if (value === null) return null
+  const s = String(value).trim()
+  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return null
+  return s
+}
+
 async function saveLog(formData: FormData) {
   'use server'
   const { supabase, user } = await requireOwner()
@@ -74,6 +89,14 @@ async function saveLog(formData: FormData) {
       user_id: user.id,
       log_date: logDate,
       sleep_hours: numericOrNull(formData.get('sleep_hours')),
+      sleep_quality_1_5: numericOrNull(formData.get('sleep_quality_1_5')),
+      bedtime: timeOrNull(formData.get('bedtime')),
+      wake_time: timeOrNull(formData.get('wake_time')),
+      morning_rhr_bpm: numericOrNull(formData.get('morning_rhr_bpm')),
+      hrv_ms: numericOrNull(formData.get('hrv_ms')),
+      body_weight_kg: numericOrNull(formData.get('body_weight_kg')),
+      mood_1_5: numericOrNull(formData.get('mood_1_5')),
+      stress_1_5: numericOrNull(formData.get('stress_1_5')),
       sleep_score: numericOrNull(formData.get('sleep_score')),
       energy: numericOrNull(formData.get('energy')),
       habit_strength_done: formData.get('habit_strength_done') === 'on',
@@ -221,6 +244,9 @@ export default async function LogPage({
 
         <fieldset className="space-y-3">
           <legend className="text-base font-semibold text-ink mb-1">Sleep</legend>
+          <p className="text-xs text-muted -mt-1">
+            Hours / bedtime / wake / RHR / HRV auto-fill via Tasker; edit if wrong.
+          </p>
           <div className="flex items-center gap-3">
             <label htmlFor="sleep_hours" className="text-sm text-muted w-24">
               Hours
@@ -255,25 +281,155 @@ export default async function LogPage({
               Samsung Health sleep score
             </span>
           </div>
+          <div className="flex items-center gap-3">
+            <label htmlFor="sleep_quality_1_5" className="text-sm text-muted w-24">
+              Quality
+            </label>
+            <div className="flex gap-3">
+              {[1, 2, 3, 4, 5].map(n => (
+                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
+                  <input
+                    type="radio"
+                    name="sleep_quality_1_5"
+                    value={n}
+                    defaultChecked={existing?.sleep_quality_1_5 === n}
+                    className="accent-[var(--color-accent)]"
+                  />
+                  {n}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label htmlFor="bedtime" className="text-sm text-muted w-24">
+              Bedtime
+            </label>
+            <input
+              id="bedtime"
+              type="time"
+              name="bedtime"
+              defaultValue={existing?.bedtime ? existing.bedtime.slice(0, 5) : ''}
+              className={`${inputClass} w-28 py-1.5`}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label htmlFor="wake_time" className="text-sm text-muted w-24">
+              Wake
+            </label>
+            <input
+              id="wake_time"
+              type="time"
+              name="wake_time"
+              defaultValue={existing?.wake_time ? existing.wake_time.slice(0, 5) : ''}
+              className={`${inputClass} w-28 py-1.5`}
+            />
+          </div>
         </fieldset>
 
-        <fieldset className="space-y-2">
-          <legend className="text-base font-semibold text-ink mb-1">Energy</legend>
-          <div className="flex gap-4">
-            {[1, 2, 3, 4, 5].map(n => (
-              <label key={n} className="flex items-center gap-1.5 text-sm text-ink-2">
-                <input
-                  type="radio"
-                  name="energy"
-                  value={n}
-                  defaultChecked={existing?.energy === n}
-                  className="accent-[var(--color-accent)]"
-                />
-                {n}
-              </label>
-            ))}
+        <fieldset className="space-y-3">
+          <legend className="text-base font-semibold text-ink mb-1">Body</legend>
+          <div className="flex items-center gap-3">
+            <label htmlFor="morning_rhr_bpm" className="text-sm text-muted w-24">
+              RHR (bpm)
+            </label>
+            <input
+              id="morning_rhr_bpm"
+              type="number"
+              name="morning_rhr_bpm"
+              min="30"
+              max="120"
+              defaultValue={existing?.morning_rhr_bpm ?? ''}
+              placeholder="52"
+              className={`${inputClass} w-28 py-1.5`}
+            />
           </div>
-          <p className="text-xs text-muted">1 = wiped, 5 = ready to race</p>
+          <div className="flex items-center gap-3">
+            <label htmlFor="hrv_ms" className="text-sm text-muted w-24">
+              HRV (ms)
+            </label>
+            <input
+              id="hrv_ms"
+              type="number"
+              name="hrv_ms"
+              min="1"
+              max="200"
+              defaultValue={existing?.hrv_ms ?? ''}
+              placeholder="48"
+              className={`${inputClass} w-28 py-1.5`}
+            />
+          </div>
+          <div className="flex items-center gap-3">
+            <label htmlFor="body_weight_kg" className="text-sm text-muted w-24">
+              Weight (kg)
+            </label>
+            <input
+              id="body_weight_kg"
+              type="number"
+              name="body_weight_kg"
+              step="0.1"
+              min="40"
+              max="150"
+              defaultValue={existing?.body_weight_kg ?? ''}
+              placeholder="76.2"
+              className={`${inputClass} w-28 py-1.5`}
+            />
+          </div>
+        </fieldset>
+
+        <fieldset className="space-y-3">
+          <legend className="text-base font-semibold text-ink mb-1">State</legend>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted w-24">Energy</label>
+            <div className="flex gap-3">
+              {[1, 2, 3, 4, 5].map(n => (
+                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
+                  <input
+                    type="radio"
+                    name="energy"
+                    value={n}
+                    defaultChecked={existing?.energy === n}
+                    className="accent-[var(--color-accent)]"
+                  />
+                  {n}
+                </label>
+              ))}
+            </div>
+            <span className="text-xs text-muted">1 wiped → 5 race-ready</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted w-24">Mood</label>
+            <div className="flex gap-3">
+              {[1, 2, 3, 4, 5].map(n => (
+                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
+                  <input
+                    type="radio"
+                    name="mood_1_5"
+                    value={n}
+                    defaultChecked={existing?.mood_1_5 === n}
+                    className="accent-[var(--color-accent)]"
+                  />
+                  {n}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-muted w-24">Stress</label>
+            <div className="flex gap-3">
+              {[1, 2, 3, 4, 5].map(n => (
+                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
+                  <input
+                    type="radio"
+                    name="stress_1_5"
+                    value={n}
+                    defaultChecked={existing?.stress_1_5 === n}
+                    className="accent-[var(--color-accent)]"
+                  />
+                  {n}
+                </label>
+              ))}
+            </div>
+          </div>
         </fieldset>
 
         <fieldset className="space-y-2">
