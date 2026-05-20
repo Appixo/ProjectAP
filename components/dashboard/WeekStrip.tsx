@@ -56,6 +56,10 @@ interface DayItem {
   dotClass: string
   status: 'planned' | 'completed' | 'skipped'
   details: ItemDetail[] | null
+  /** Session id when kind='session'. Null for runs. Used for reschedule. */
+  sessionId: string | null
+  /** True when status='planned' and the day has already passed. */
+  isMissed: boolean
 }
 
 interface ItemDetail {
@@ -342,6 +346,38 @@ export function WeekStrip({
     }
   }
 
+  async function actOnSession(
+    sessionId: string,
+    action: 'next_rest_day' | 'skip',
+  ) {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/reschedule`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action }),
+        cache: 'no-store',
+      })
+      const data = (await res.json()) as
+        | { ok: true; action: string; newDate?: string }
+        | { error: string; detail?: string }
+      if (!res.ok || !('ok' in data)) {
+        const msg = 'error' in data ? `${data.error}${data.detail ? `: ${data.detail}` : ''}` : `http ${res.status}`
+        throw new Error(msg)
+      }
+      setOpenKey(null)
+      // Refetch the current week so the moved/skipped session renders in
+      // its new state. If the move pushed the session into a future week,
+      // it disappears from this strip — user can navigate next to find it.
+      await navigateTo(currentMonday)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'action failed')
+      setLoading(false)
+    }
+  }
+
   const stripIsToday = currentMonday === todayMonday
   const title = stripIsToday ? 'This week' : 'Week'
   const weekLabel = formatLabelForMonday(
@@ -374,6 +410,8 @@ export function WeekStrip({
       dotClass: runDotClass(r.runType),
       status: 'completed',
       details: detailsForRun(r),
+      sessionId: null,
+      isMissed: false,
     })
   }
 
@@ -388,6 +426,10 @@ export function WeekStrip({
     else if (d?.target_distance_km != null) primary = `${d.target_distance_km} km`
     else if (d?.target_duration_min != null) primary = `${d.target_duration_min} min`
     else primary = '—'
+    // "Missed" = planned + the calendar day has already passed in Amsterdam.
+    // Today's still-planned sessions are not yet missed; they roll over at
+    // local midnight.
+    const isMissed = status === 'planned' && ymd < todayYmd
     cell.items.push({
       key: `session-${s.id}`,
       kind: 'session',
@@ -396,6 +438,8 @@ export function WeekStrip({
       dotClass: sessionDotClass(s.modality),
       status,
       details: detailsForSession(s),
+      sessionId: s.id,
+      isMissed,
     })
   }
 
@@ -497,20 +541,26 @@ export function WeekStrip({
                         onClick={() => setOpenKey(isOpen ? null : it.key)}
                         aria-expanded={isOpen}
                         className={`w-full flex items-start gap-1.5 text-left text-[11px] leading-tight rounded px-1 -mx-1 py-0.5 hover:bg-accent-soft focus:outline-none focus:bg-accent-soft transition-colors ${
-                          it.status === 'planned' ? 'opacity-80' : ''
+                          it.status === 'planned' && !it.isMissed ? 'opacity-80' : ''
                         } ${isOpen ? 'bg-accent-soft' : ''}`}
                       >
                         <span
-                          className={`inline-block w-[6px] h-[6px] mt-[5px] shrink-0 ${
-                            it.status === 'planned'
-                              ? `rounded-full border border-ink-2 bg-transparent`
-                              : `rounded-full ${it.dotClass}`
+                          className={`inline-block w-[6px] h-[6px] mt-[5px] shrink-0 rounded-full ${
+                            it.isMissed
+                              ? 'border border-warn bg-transparent'
+                              : it.status === 'planned'
+                                ? 'border border-ink-2 bg-transparent'
+                                : it.dotClass
                           }`}
                         />
                         <div className="min-w-0 flex-1">
                           <div
                             className={`font-mono -tracking-[0.01em] truncate ${
-                              it.status === 'planned' ? 'text-ink-2 italic' : 'text-ink'
+                              it.isMissed
+                                ? 'text-warn'
+                                : it.status === 'planned'
+                                  ? 'text-ink-2 italic'
+                                  : 'text-ink'
                             }`}
                           >
                             {it.primary}
@@ -523,6 +573,17 @@ export function WeekStrip({
                         <ItemPopover
                           details={it.details}
                           onClose={() => setOpenKey(null)}
+                          actions={
+                            it.isMissed && it.sessionId
+                              ? {
+                                  pending: loading,
+                                  onReschedule: () =>
+                                    actOnSession(it.sessionId as string, 'next_rest_day'),
+                                  onSkip: () =>
+                                    actOnSession(it.sessionId as string, 'skip'),
+                                }
+                              : undefined
+                          }
                         />
                       )}
                     </li>
@@ -547,12 +608,20 @@ export function WeekStrip({
   )
 }
 
+interface PopoverActions {
+  pending: boolean
+  onReschedule: () => void
+  onSkip: () => void
+}
+
 function ItemPopover({
   details,
   onClose,
+  actions,
 }: {
   details: ItemDetail[]
   onClose: () => void
+  actions?: PopoverActions
 }) {
   return (
     <div
@@ -580,6 +649,29 @@ function ItemPopover({
           </div>
         ))}
       </dl>
+      {actions && (
+        <div className="pt-2 mt-2 border-t border-border space-y-1">
+          <p className="text-warn text-[10px] uppercase tracking-[0.06em]">Missed</p>
+          <div className="flex gap-1.5">
+            <button
+              type="button"
+              onClick={actions.onReschedule}
+              disabled={actions.pending}
+              className="flex-1 font-mono text-[11px] text-ink-2 border border-border rounded px-2 py-1 hover:border-border-2 hover:text-ink disabled:opacity-50"
+            >
+              Reschedule
+            </button>
+            <button
+              type="button"
+              onClick={actions.onSkip}
+              disabled={actions.pending}
+              className="flex-1 font-mono text-[11px] text-ink-2 border border-border rounded px-2 py-1 hover:border-border-2 hover:text-ink disabled:opacity-50"
+            >
+              Skip
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
