@@ -868,6 +868,54 @@ Content-Type: application/json
           </div>
         </details>
       </section>
+
+      <section className="space-y-3">
+        <h2 className="text-lg font-semibold text-ink">Automation: Galaxy Watch → daily_log</h2>
+        <p className="text-sm text-muted">
+          Run a single Tasker task each morning that reads last night&rsquo;s sleep, HRV and
+          resting heart rate from Health Connect and POSTs them to the dashboard. After setup,
+          the wellness side of training is hands-off — same pattern as Strava&rsquo;s webhook for
+          runs.
+        </p>
+
+        <div className="text-sm text-ink-2 space-y-2">
+          <p>
+            Endpoint:{' '}
+            <code className="font-mono text-xs">POST {exportUrlBase}/api/daily-logs?token=&lt;WRITE_TOKEN&gt;</code>
+          </p>
+          <pre className="font-mono text-xs bg-panel border border-border rounded p-3 overflow-x-auto whitespace-pre">
+{`{
+  "date": "${new Date().toISOString().slice(0, 10)}",
+  "sleep_hours": 7.5,           // from Health Connect sleep_session
+  "bedtime": "23:30",           // HH:MM local
+  "wake_time": "07:00",
+  "morning_rhr_bpm": 52,        // from Health Connect resting_heart_rate
+  "hrv_ms": 48                  // from Health Connect heart_rate_variability_rmssd
+}`}
+          </pre>
+          <p className="text-xs text-muted">
+            Upserts on <code className="font-mono">(user, date)</code> — running multiple times
+            the same morning overwrites; partial payloads leave manual fields (mood, soreness,
+            body weight) untouched.
+          </p>
+        </div>
+
+        <div className="text-sm text-ink-2 space-y-2 pt-2">
+          <p className="font-semibold text-ink">Setup, step by step:</p>
+          <a
+            href="https://github.com/Appixo/ProjectAP/blob/main/docs/automation/tasker-galaxy.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block rounded border border-border bg-panel text-ink px-3 py-1.5 text-sm hover:border-border-2"
+          >
+            docs/automation/tasker-galaxy.md →
+          </a>
+          <p className="text-xs text-muted">
+            Tasker + Health Connect plugin required (Android 14+). If that&rsquo;s more friction
+            than typing, use the homescreen shortcut fallback at the bottom of the doc.
+          </p>
+        </div>
+      </section>
     </div>
   )
 }
