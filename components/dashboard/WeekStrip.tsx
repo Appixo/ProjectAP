@@ -37,16 +37,15 @@ export interface SessionDescription {
 }
 
 export interface WeekStripProps {
-  weekLabel: string
-  monday: string
+  /** Monday of the week to render first (from URL ?weekMonday or today). */
+  initialMonday: string
+  /** Always today's Monday — used to compute "today" highlight + button state. */
+  todayMonday: string
   todayYmd: string
-  runs: WeekStripRun[]
-  sessions: WeekStripSession[]
-  title?: string
-  prevHref?: string
-  nextHref?: string
-  /** null when the strip already shows the current week. */
-  todayHref?: string | null
+  initialRuns: WeekStripRun[]
+  initialSessions: WeekStripSession[]
+  /** Optional in-code plan week number; surfaces in the label when on current week. */
+  planWeekNumber?: number | null
 }
 
 interface DayItem {
@@ -84,6 +83,10 @@ function addDaysYmd(ymd: string, n: number): string {
   const date = new Date(Date.UTC(y, m - 1, d))
   date.setUTCDate(date.getUTCDate() + n)
   return date.toISOString().slice(0, 10)
+}
+
+function addWeeksYmd(ymd: string, n: number): string {
+  return addDaysYmd(ymd, n * 7)
 }
 
 function dayNumber(ymd: string): number {
@@ -163,8 +166,27 @@ function paceLabel(spk?: number): string | null {
 }
 
 function timeOfDay(localIso: string): string {
-  // "2026-05-18T19:00:00" → "19:00"
   return localIso.slice(11, 16)
+}
+
+function formatMonthDay(ymd: string): string {
+  return new Date(ymd + 'T00:00:00Z').toLocaleDateString('en-GB', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+function formatLabelForMonday(monday: string, planWeek?: number | null): string {
+  const sundayDate = new Date(monday + 'T00:00:00Z')
+  sundayDate.setUTCDate(sundayDate.getUTCDate() + 6)
+  const sundayLabel = sundayDate.toLocaleDateString('en-GB', {
+    timeZone: 'UTC',
+    month: 'short',
+    day: 'numeric',
+  })
+  const range = `${formatMonthDay(monday)} – ${sundayLabel}`
+  return planWeek ? `${range} · week ${planWeek}` : range
 }
 
 function detailsForSession(s: WeekStripSession): ItemDetail[] {
@@ -201,8 +223,6 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
   if (s.format) out.push({ label: 'Format', value: s.format })
   if (d?.reason) out.push({ label: 'Why', value: d.reason })
   if (s.notes) out.push({ label: 'Notes', value: s.notes })
-  // Append actual run results when this session is a planned-run matched
-  // to a Strava activity, so the popover shows prescription + execution.
   if (s.matched_run) {
     const r = s.matched_run
     const km = r.distance_m / 1000
@@ -231,26 +251,34 @@ function detailsForRun(r: WeekStripRun): ItemDetail[] {
     { label: 'Moving time', value: `${Math.floor(min)} min ${Math.round((min % 1) * 60)} s` },
     { label: 'Pace', value: `${m}:${String(s).padStart(2, '0')}/km` },
     { label: 'Type', value: r.runType },
-    { label: 'Time', value: new Date(r.start_at).toLocaleTimeString('en-GB', { timeZone: 'Europe/Amsterdam', hour: '2-digit', minute: '2-digit' }) },
+    {
+      label: 'Time',
+      value: new Date(r.start_at).toLocaleTimeString('en-GB', {
+        timeZone: 'Europe/Amsterdam',
+        hour: '2-digit',
+        minute: '2-digit',
+      }),
+    },
   ]
 }
 
 export function WeekStrip({
-  weekLabel,
-  monday,
+  initialMonday,
+  todayMonday,
   todayYmd,
-  runs,
-  sessions,
-  title = 'This week',
-  prevHref,
-  nextHref,
-  todayHref,
+  initialRuns,
+  initialSessions,
+  planWeekNumber,
 }: WeekStripProps) {
   const [openKey, setOpenKey] = useState<string | null>(null)
+  const [currentMonday, setCurrentMonday] = useState(initialMonday)
+  const [runs, setRuns] = useState(initialRuns)
+  const [sessions, setSessions] = useState(initialSessions)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement | null>(null)
 
-  // Close the popover when the user clicks anywhere outside it. We bind to
-  // mousedown so the click that opens it doesn't immediately close.
+  // Close the popover when the user clicks anywhere outside it.
   useEffect(() => {
     if (openKey === null) return
     function onDocMousedown(e: MouseEvent) {
@@ -265,7 +293,6 @@ export function WeekStrip({
     return () => document.removeEventListener('mousedown', onDocMousedown)
   }, [openKey])
 
-  // Close on Escape.
   useEffect(() => {
     if (openKey === null) return
     function onKey(e: KeyboardEvent) {
@@ -275,8 +302,55 @@ export function WeekStrip({
     return () => document.removeEventListener('keydown', onKey)
   }, [openKey])
 
+  async function navigateTo(monday: string) {
+    if (loading) return
+    setLoading(true)
+    setError(null)
+    setOpenKey(null)
+    try {
+      const res = await fetch(
+        `/api/dashboard/strip?weekMonday=${encodeURIComponent(monday)}`,
+        { cache: 'no-store' },
+      )
+      if (!res.ok) {
+        throw new Error(`http ${res.status}`)
+      }
+      const data = (await res.json()) as {
+        monday: string
+        runs: WeekStripRun[]
+        sessions: WeekStripSession[]
+      }
+      setCurrentMonday(data.monday)
+      setRuns(data.runs)
+      setSessions(data.sessions)
+      // Reflect the new week in the URL so refresh/share works, but use
+      // history.replaceState to avoid triggering the Next.js server tree
+      // re-render that router.replace would cause.
+      if (typeof window !== 'undefined') {
+        const url = new URL(window.location.href)
+        if (data.monday === todayMonday) {
+          url.searchParams.delete('weekMonday')
+        } else {
+          url.searchParams.set('weekMonday', data.monday)
+        }
+        window.history.replaceState({}, '', url.toString())
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'load failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const stripIsToday = currentMonday === todayMonday
+  const title = stripIsToday ? 'This week' : 'Week'
+  const weekLabel = formatLabelForMonday(
+    currentMonday,
+    stripIsToday ? planWeekNumber ?? undefined : undefined,
+  )
+
   const days = Array.from({ length: 7 }, (_, i) => {
-    const ymd = addDaysYmd(monday, i)
+    const ymd = addDaysYmd(currentMonday, i)
     return {
       ymd,
       weekday: WEEKDAY_LABELS[i],
@@ -333,7 +407,9 @@ export function WeekStrip({
   return (
     <section
       ref={containerRef}
-      className="card bg-panel border border-border rounded-[4px] mb-4 relative"
+      className={`card bg-panel border border-border rounded-[4px] mb-4 relative ${
+        loading ? 'opacity-70' : ''
+      }`}
     >
       <div className="card-hd flex items-center justify-between px-4 py-3 border-b border-border gap-3">
         <div className="flex items-baseline gap-3 min-w-0">
@@ -343,37 +419,43 @@ export function WeekStrip({
           <span className="font-mono text-[11px] text-muted -tracking-[0.01em] truncate">
             {weekLabel}
           </span>
+          {loading && (
+            <span className="font-mono text-[10px] text-muted shrink-0">loading…</span>
+          )}
+          {error && (
+            <span className="font-mono text-[10px] text-warn shrink-0">{error}</span>
+          )}
         </div>
-        {(prevHref || nextHref) && (
-          <nav className="flex items-center gap-1 shrink-0" aria-label="Week navigation">
-            {prevHref && (
-              <a
-                href={prevHref}
-                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
-                aria-label="Previous week"
-              >
-                ← prev
-              </a>
-            )}
-            {todayHref && (
-              <a
-                href={todayHref}
-                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
-              >
-                today
-              </a>
-            )}
-            {nextHref && (
-              <a
-                href={nextHref}
-                className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2"
-                aria-label="Next week"
-              >
-                next →
-              </a>
-            )}
-          </nav>
-        )}
+        <nav className="flex items-center gap-1 shrink-0" aria-label="Week navigation">
+          <button
+            type="button"
+            onClick={() => navigateTo(addWeeksYmd(currentMonday, -1))}
+            disabled={loading}
+            aria-label="Previous week"
+            className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2 disabled:opacity-50"
+          >
+            ← prev
+          </button>
+          {!stripIsToday && (
+            <button
+              type="button"
+              onClick={() => navigateTo(todayMonday)}
+              disabled={loading}
+              className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2 disabled:opacity-50"
+            >
+              today
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => navigateTo(addWeeksYmd(currentMonday, 1))}
+            disabled={loading}
+            aria-label="Next week"
+            className="font-mono text-[11px] text-muted hover:text-ink border border-border rounded px-1.5 py-0.5 hover:border-border-2 disabled:opacity-50"
+          >
+            next →
+          </button>
+        </nav>
       </div>
 
       <div className="grid grid-cols-7">

@@ -9,12 +9,12 @@ import {
   type WeekReviewSession,
   type WeekReviewGoals,
 } from '@/components/dashboard/WeekReview'
+import { WeekStrip } from '@/components/dashboard/WeekStrip'
 import {
-  WeekStrip,
-  type WeekStripRun,
-  type WeekStripSession,
-  type SessionDescription,
-} from '@/components/dashboard/WeekStrip'
+  buildStripData,
+  type RawStripRun,
+  type RawStripSession,
+} from '@/lib/strip/build'
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
 import { Adherence } from '@/components/dashboard/Adherence'
 import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
@@ -24,6 +24,8 @@ import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components
 import { LongestRun, type LongestDatum } from '@/components/charts/LongestRun'
 import { PaceTrend, type PaceDatum } from '@/components/charts/PaceTrend'
 import { Sleep, type SleepDatum } from '@/components/charts/Sleep'
+import { YearHeatmap } from '@/components/dashboard/YearHeatmap'
+import { buildHeatmapDays, type HeatmapActivity, type HeatmapSession } from '@/lib/heatmap/build'
 import { classifyRuns, formatPace } from '@/lib/run/classify'
 import { pctChange, sumKm, weeklyBuckets } from '@/lib/run/aggregate'
 import { planContext } from '@/lib/time/race'
@@ -58,19 +60,9 @@ interface RawDailyLog {
   habit_in_bed_on_time: boolean
 }
 
-interface RawSession {
-  id: string
-  session_at: string
-  session_at_local: string
-  modality: string
-  duration_min: number | null
-  rpe: number | null
-  status: 'planned' | 'completed' | 'skipped' | null
-  description: SessionDescription | null
-  format: string | null
-  notes: string | null
-  matched_activity_id: number | null
-}
+// RawSession reused from lib/strip/build — shape is identical to what we
+// fetch from training_sessions for the strip and the week review.
+type RawSession = RawStripSession
 
 interface RawGoals {
   primary_goal: string
@@ -152,6 +144,9 @@ export default async function DashboardPage({
   const stripEndIso = new Date(
     addWeeks(stripMonday, 1) + 'T00:00:00Z',
   ).toISOString()
+  const heatmapStartIso = new Date(
+    now.getTime() - 364 * 86400 * 1000,
+  ).toISOString()
   const nowIso = now.toISOString()
 
   const [
@@ -164,6 +159,8 @@ export default async function DashboardPage({
     { data: lastWeekSessionsRaw },
     { data: adherenceSessionsRaw },
     { data: goalsRaw },
+    { data: heatmapActivitiesRaw },
+    { data: heatmapSessionsRaw },
   ] = await Promise.all([
     supabase
       .from('activities')
@@ -266,6 +263,21 @@ export default async function DashboardPage({
       )
       .eq('user_id', user.id)
       .maybeSingle<RawGoals>(),
+    // Year heatmap — 365-day rolling window for the dashboard mirror of the
+    // /history heatmap. Two small parallel queries; aggregation is pure.
+    supabase
+      .from('activities')
+      .select('start_at, distance_m, moving_time_s, type')
+      .eq('user_id', user.id)
+      .gte('start_at', heatmapStartIso)
+      .returns<HeatmapActivity[]>(),
+    supabase
+      .from('training_sessions')
+      .select('session_at_local, modality, duration_min')
+      .eq('user_id', user.id)
+      .gte('session_at', heatmapStartIso)
+      .neq('status', 'planned')
+      .returns<HeatmapSession[]>(),
   ])
 
   const activities = rawActivities ?? []
@@ -380,18 +392,6 @@ export default async function DashboardPage({
   const plan = planContext(now)
   const weekLabelReview = formatWeekLabel(lastWeekMonday, Math.max(1, plan.weekNumber - 1))
   const weekLabelThisWeek = formatWeekLabel(todayMonday, plan.weekNumber)
-  // Strip label: include the in-code plan week number only when the strip
-  // is anchored to the current week; for browsed weeks just show the date
-  // range, since plan.weekNumber is computed relative to today not stripMonday.
-  const stripIsToday = stripMonday === todayMonday
-  const stripWeekLabel = stripIsToday
-    ? weekLabelThisWeek
-    : formatWeekLabel(stripMonday)
-  const stripTitle = stripIsToday ? 'This week' : 'Week'
-  const stripPrevHref = `/?weekMonday=${addWeeks(stripMonday, -1)}`
-  const stripNextHref = `/?weekMonday=${addWeeks(stripMonday, 1)}`
-  const stripTodayHref = stripIsToday ? null : `/`
-
   const runRows: RunRow[] = thisWeekRuns
     .slice()
     .sort(
@@ -476,51 +476,23 @@ export default async function DashboardPage({
     })),
     manualPbList,
   )
-  // Dedup planned-run matches: when a session has matched_activity_id set,
-  // hide that activity from the runs strip (the session already represents
-  // it) and attach the run's actuals to the session for the popover.
-  const matchedActivityIds = new Set(
-    stripSessionsList
-      .filter(s => s.matched_activity_id != null)
-      .map(s => s.matched_activity_id as number),
+  // Strip data built via the shared helper so the SSR initial render and
+  // the /api/dashboard/strip endpoint produce identical shapes. Pass the
+  // classifier result so SSR keeps the accurate run-type colours; the API
+  // path defaults to 'easy' for speed.
+  const stripRawRuns: RawStripRun[] = stripWeekRuns.map(r => ({
+    id: r.id,
+    start_at: r.start_at,
+    distance_m: r.distance_m,
+    moving_time_s: r.moving_time_s,
+    average_speed_mps: r.average_speed_mps,
+  }))
+  const stripRunTypes = new Map(stripWeekRuns.map(r => [r.id, r.runType]))
+  const { runs: stripRuns, sessions: stripSessions } = buildStripData(
+    stripRawRuns,
+    stripSessionsList,
+    stripRunTypes,
   )
-  const runById = new Map(stripWeekRuns.map(r => [r.id, r]))
-
-  const stripRuns: WeekStripRun[] = stripWeekRuns
-    .filter(r => !matchedActivityIds.has(r.id))
-    .map(r => ({
-      id: r.id,
-      start_at: r.start_at,
-      distance_m: r.distance_m,
-      moving_time_s: r.moving_time_s,
-      runType: r.runType,
-    }))
-  const stripSessions: WeekStripSession[] = stripSessionsList
-    .filter(s => (s.status ?? 'completed') !== 'skipped')
-    .map(s => {
-      const matched =
-        s.matched_activity_id != null ? runById.get(s.matched_activity_id) : undefined
-      return {
-        id: s.id,
-        session_at_local: s.session_at_local,
-        modality: s.modality,
-        duration_min: s.duration_min,
-        rpe: s.rpe,
-        status: s.status,
-        description: s.description,
-        format: s.format,
-        notes: s.notes,
-        matched_run: matched
-          ? {
-              id: matched.id,
-              start_at: matched.start_at,
-              distance_m: matched.distance_m,
-              moving_time_s: matched.moving_time_s,
-              runType: matched.runType,
-            }
-          : null,
-      }
-    })
 
   const reviewSessions: WeekReviewSession[] = lastWeekSessions.map(s => ({
     id: s.id,
@@ -543,9 +515,19 @@ export default async function DashboardPage({
       }
     : null
 
+  const heatmapDays = buildHeatmapDays(
+    heatmapActivitiesRaw ?? [],
+    heatmapSessionsRaw ?? [],
+  )
+
   return (
     <div className="max-w-[1200px] mx-auto px-7 pt-8 pb-20">
       <DashboardHeader />
+
+      {/* year heatmap — glance-view of training across the last 365 days */}
+      <div className="mb-4">
+        <YearHeatmap days={heatmapDays} />
+      </div>
 
       {/* inputs row */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -563,17 +545,14 @@ export default async function DashboardPage({
         missed={missed}
       />
 
-      {/* strip — cross-modal day grid; browse-able via ?weekMonday */}
+      {/* strip — cross-modal day grid; nav is client-side via /api/dashboard/strip */}
       <WeekStrip
-        title={stripTitle}
-        weekLabel={stripWeekLabel}
-        monday={stripMonday}
+        initialMonday={stripMonday}
+        todayMonday={todayMonday}
         todayYmd={todayYmd}
-        runs={stripRuns}
-        sessions={stripSessions}
-        prevHref={stripPrevHref}
-        nextHref={stripNextHref}
-        todayHref={stripTodayHref}
+        initialRuns={stripRuns}
+        initialSessions={stripSessions}
+        planWeekNumber={plan.weekNumber}
       />
 
       {/* week review */}

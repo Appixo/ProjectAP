@@ -7,6 +7,11 @@ import { createSupabaseAdminClient } from '@/lib/supabase/admin'
 // client, then runs through the service-role client (bypassing RLS). Queries
 // must still pass an explicit .eq('user_id', user.id) filter — without it,
 // the admin client would return rows across all users.
+//
+// Fast path: if OWNER_USER_ID + ALLOWED_EMAIL are both in env, skip the
+// listUsers() round-trip entirely. Saves ~200–500 ms per cold start
+// (Supabase auth.admin.listUsers is a remote call, can be the slowest
+// thing in a cold Lambda).
 
 let cached: { id: string; email: string } | null = null
 
@@ -19,6 +24,12 @@ export async function requireOwner(): Promise<{
 
   const email = process.env.ALLOWED_EMAIL
   if (!email) throw new Error('ALLOWED_EMAIL not set')
+
+  const envOwnerId = process.env.OWNER_USER_ID
+  if (envOwnerId) {
+    cached = { id: envOwnerId, email }
+    return { supabase, user: cached }
+  }
 
   const { data, error } = await supabase.auth.admin.listUsers()
   if (error) throw new Error(`failed to list users: ${error.message}`)
