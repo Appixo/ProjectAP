@@ -38,6 +38,13 @@ import {
   ymdInAmsterdam,
 } from '@/lib/time/week'
 
+// The whole render depends on `new Date()` and on Supabase reads that are
+// not wrapped in Next's fetch cache, so nothing in the tree signals "dynamic"
+// to the framework. Without this, the page is prerendered at build time and
+// served from the CDN — "today" and the activity feed freeze on the deploy
+// date.
+export const dynamic = 'force-dynamic'
+
 const WEEKS_FOR_MILEAGE = 16
 const WEEKS_FOR_LONGEST = 12
 const DAYS_FOR_PACE = 90
