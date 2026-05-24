@@ -16,7 +16,6 @@ import {
   type RawStripSession,
 } from '@/lib/strip/build'
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
-import { Adherence } from '@/components/dashboard/Adherence'
 import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
 import { Footnote } from '@/components/dashboard/Footnote'
@@ -140,9 +139,6 @@ export default async function DashboardPage({
     new Date(now.getTime() - DAYS_FOR_SLEEP * 86400 * 1000),
   )
 
-  const adherenceWindowStartIso = new Date(
-    now.getTime() - 14 * 86400 * 1000,
-  ).toISOString()
   const lastWeekStartIso = new Date(
     lastWeekMonday + 'T00:00:00Z',
   ).toISOString()
@@ -156,8 +152,6 @@ export default async function DashboardPage({
   const heatmapStartIso = new Date(
     now.getTime() - 364 * 86400 * 1000,
   ).toISOString()
-  const nowIso = now.toISOString()
-
   const [
     { data: rawActivities },
     { data: allTimeRuns },
@@ -166,7 +160,6 @@ export default async function DashboardPage({
     { data: lastWeekLogs },
     { data: stripSessionsRaw },
     { data: lastWeekSessionsRaw },
-    { data: adherenceSessionsRaw },
     { data: goalsRaw },
     { data: heatmapActivitiesRaw },
     { data: heatmapSessionsRaw },
@@ -258,15 +251,6 @@ export default async function DashboardPage({
       .lt('session_at', thisWeekStartIso)
       .order('session_at', { ascending: true })
       .returns<RawSession[]>(),
-    // Adherence window: all sessions in the last 14 days, regardless of
-    // status. Future sessions are excluded — the dashboard is logs-only.
-    supabase
-      .from('training_sessions')
-      .select('id, session_at, status')
-      .eq('user_id', user.id)
-      .gte('session_at', adherenceWindowStartIso)
-      .lte('session_at', nowIso)
-      .returns<{ id: string; session_at: string; status: string | null }[]>(),
     supabase
       .from('goals')
       .select(
@@ -489,17 +473,6 @@ export default async function DashboardPage({
   const stripSessionsList = stripSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
 
-  // Adherence in the last 14 days. Planned-but-not-completed = missed.
-  let completed = 0
-  let skipped = 0
-  let missed = 0
-  for (const s of adherenceSessionsRaw ?? []) {
-    const status = s.status ?? 'completed'
-    if (status === 'completed') completed += 1
-    else if (status === 'skipped') skipped += 1
-    else if (status === 'planned') missed += 1
-  }
-
   // Personal bests computed across all-time runs. bestEfforts() accepts the
   // ActivityForDerived shape; we only need id/start_at/distance_m/moving_time_s
   // /type/source — fill the remaining fields with safe defaults.
@@ -648,13 +621,6 @@ export default async function DashboardPage({
 
       {/* personal bests across all time */}
       <PersonalBests best={personalBests} />
-
-      {/* adherence — last 14 days planned vs completed */}
-      <Adherence
-        completed={completed}
-        skipped={skipped}
-        missed={missed}
-      />
 
       {/* strip — cross-modal day grid; nav is client-side via /api/dashboard/strip */}
       <WeekStrip
