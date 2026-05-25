@@ -11,7 +11,10 @@ export interface RunInput {
 // from distance + pace context. Boring and good-enough until manual tagging
 // (or a workout label from Strava) is added.
 //
-// - long      : distance >= 12 km OR is the single longest run in its week
+// - long      : distance >= 12 km, OR is the longest run in a week that has
+//               ≥ 2 runs AND is at least 1.5× the median distance for the
+//               week (so a partial-week single run doesn't get promoted to
+//               "long" just by being the only data point).
 // - tempo     : avg pace is at least 8% faster than the week's median pace
 //               (and not the long run)
 // - recovery  : distance <= 5 km AND pace is at least 8% slower than median
@@ -52,12 +55,22 @@ export function classifyRuns(runs: RunInput[]): Map<number, RunType> {
         ? null
         : speeds[Math.floor(speeds.length / 2)]
 
+    // Median distance is computed on the same Mon-Sun window. Used to
+    // gate the "longest-of-week is long" rule so a partial week with a
+    // single shakeout doesn't get tagged as long.
+    const distances = weekRuns
+      .map(r => r.distance_m)
+      .sort((a, b) => a - b)
+    const medianDistance = distances[Math.floor(distances.length / 2)]
+    const longestIsTrulyLong =
+      weekRuns.length >= 2 && longest.distance_m >= medianDistance * 1.5
+
     for (const r of weekRuns) {
       let type: RunType = 'easy'
       const distKm = r.distance_m / 1000
       const speed = r.average_speed_mps ?? 0
 
-      if (distKm >= 12 || r.id === longest.id) {
+      if (distKm >= 12 || (r.id === longest.id && longestIsTrulyLong)) {
         type = 'long'
       } else if (medianSpeed && speed > 0) {
         const ratio = speed / medianSpeed
