@@ -15,6 +15,7 @@
 import { config as loadEnv } from 'dotenv'
 loadEnv({ path: '.env.local' })
 
+import WebSocket from 'ws'
 import { createClient } from '@supabase/supabase-js'
 import { addDays, amsterdamWallClockToUtcIso } from '../lib/time/week'
 
@@ -325,6 +326,9 @@ interface RowInWindow {
 async function main() {
   const supabase = createClient(SUPABASE_URL!, SUPABASE_SERVICE_ROLE_KEY!, {
     auth: { autoRefreshToken: false, persistSession: false },
+    realtime: {
+      transport: WebSocket as unknown as typeof globalThis.WebSocket,
+    },
   })
 
   let userId: string
