@@ -364,7 +364,7 @@ export function WeekStrip({
 
   async function actOnSession(
     sessionId: string,
-    action: 'next_rest_day' | 'skip',
+    action: 'next_rest_day' | 'skip' | 'complete',
   ) {
     if (loading) return
     setLoading(true)
@@ -599,11 +599,19 @@ export function WeekStrip({
                             it.sessionId ? `/log/session/${it.sessionId}/edit` : undefined
                           }
                           actions={
-                            it.isMissed && it.sessionId
+                            it.sessionId && it.status === 'planned'
                               ? {
                                   pending: loading,
-                                  onReschedule: () =>
-                                    actOnSession(it.sessionId as string, 'next_rest_day'),
+                                  kind: it.isMissed ? 'missed' : 'planned',
+                                  onComplete: () =>
+                                    actOnSession(it.sessionId as string, 'complete'),
+                                  onReschedule: it.isMissed
+                                    ? () =>
+                                        actOnSession(
+                                          it.sessionId as string,
+                                          'next_rest_day',
+                                        )
+                                    : undefined,
                                   onSkip: () =>
                                     actOnSession(it.sessionId as string, 'skip'),
                                 }
@@ -635,7 +643,12 @@ export function WeekStrip({
 
 interface PopoverActions {
   pending: boolean
-  onReschedule: () => void
+  /** 'missed' shows the warn header; 'planned' is the quiet variant. */
+  kind: 'missed' | 'planned'
+  onComplete: () => void
+  /** Only offered for missed days — moving a future session out of its slot
+   *  is rarely what you want. */
+  onReschedule?: () => void
   onSkip: () => void
 }
 
@@ -688,16 +701,28 @@ function ItemPopover({
       </dl>
       {actions && (
         <div className="pt-2 mt-2 border-t border-border space-y-1">
-          <p className="text-warn text-[10px] uppercase tracking-[0.06em]">Missed</p>
-          <div className="flex gap-1.5">
+          {actions.kind === 'missed' && (
+            <p className="text-warn text-[10px] uppercase tracking-[0.06em]">Missed</p>
+          )}
+          <div className="flex gap-1.5 flex-wrap">
             <button
               type="button"
-              onClick={actions.onReschedule}
+              onClick={actions.onComplete}
               disabled={actions.pending}
-              className="flex-1 font-mono text-[11px] text-ink-2 border border-border rounded px-2 py-1 hover:border-border-2 hover:text-ink disabled:opacity-50"
+              className="flex-1 font-mono text-[11px] text-ink border border-accent rounded px-2 py-1 bg-accent-soft hover:bg-accent-soft hover:border-accent disabled:opacity-50"
             >
-              Reschedule
+              Mark done
             </button>
+            {actions.onReschedule && (
+              <button
+                type="button"
+                onClick={actions.onReschedule}
+                disabled={actions.pending}
+                className="flex-1 font-mono text-[11px] text-ink-2 border border-border rounded px-2 py-1 hover:border-border-2 hover:text-ink disabled:opacity-50"
+              >
+                Reschedule
+              </button>
+            )}
             <button
               type="button"
               onClick={actions.onSkip}

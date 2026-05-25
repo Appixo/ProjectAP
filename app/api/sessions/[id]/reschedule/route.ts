@@ -7,7 +7,10 @@ import {
   todayInAmsterdam,
 } from '@/lib/time/week'
 
-// Two actions for a missed planned session:
+// Actions for a planned session:
+//   - action='complete'       → mark it status='completed'. One-tap "I did
+//                               this" with no duration/notes required — keeps
+//                               friction near zero for strength/football days.
 //   - action='skip'           → mark it status='skipped'; no date change.
 //   - action='next_rest_day'  → find the next day in the next 14 days with no
 //                               other (non-skipped) session, move this row to
@@ -47,9 +50,12 @@ export async function POST(
   }
 
   const action = body.action
-  if (action !== 'next_rest_day' && action !== 'skip') {
+  if (action !== 'next_rest_day' && action !== 'skip' && action !== 'complete') {
     return NextResponse.json(
-      { error: 'invalid_action', detail: "expected 'next_rest_day' or 'skip'" },
+      {
+        error: 'invalid_action',
+        detail: "expected 'next_rest_day', 'skip', or 'complete'",
+      },
       { status: 400 },
     )
   }
@@ -71,10 +77,11 @@ export async function POST(
     return NextResponse.json({ error: 'not_found' }, { status: 404 })
   }
 
-  if (action === 'skip') {
+  if (action === 'skip' || action === 'complete') {
+    const newStatus = action === 'skip' ? 'skipped' : 'completed'
     const { error } = await admin
       .from('training_sessions')
-      .update({ status: 'skipped' })
+      .update({ status: newStatus })
       .eq('id', id)
       .eq('user_id', user.id)
     if (error) {
@@ -83,7 +90,7 @@ export async function POST(
         { status: 500 },
       )
     }
-    return NextResponse.json({ ok: true, action: 'skip' })
+    return NextResponse.json({ ok: true, action })
   }
 
   // next_rest_day: find the next day in the next 14 days with no
