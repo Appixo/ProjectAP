@@ -23,6 +23,12 @@ import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components
 import { LongestRun, type LongestDatum } from '@/components/charts/LongestRun'
 import { PaceTrend, type PaceDatum } from '@/components/charts/PaceTrend'
 import { Sleep, type SleepDatum } from '@/components/charts/Sleep'
+import {
+  ConsistencyChart,
+  ConsistencyLegend,
+  ConsistencyStats,
+  type ConsistencyDatum,
+} from '@/components/charts/Consistency'
 import { YearHeatmap } from '@/components/dashboard/YearHeatmap'
 import { TodayLine, type TodayLineSession, type TodayLineWellness } from '@/components/dashboard/TodayLine'
 import { buildHeatmapDays, type HeatmapActivity, type HeatmapSession } from '@/lib/heatmap/build'
@@ -34,6 +40,7 @@ import {
   addWeeks,
   mondayOfYmd,
   todayMondayInAmsterdam,
+  weekStartFromStartAt,
   ymdInAmsterdam,
 } from '@/lib/time/week'
 
@@ -46,6 +53,8 @@ export const dynamic = 'force-dynamic'
 
 const WEEKS_FOR_MILEAGE = 16
 const WEEKS_FOR_LONGEST = 12
+const WEEKS_FOR_CONSISTENCY = 12
+const PROJECTED_WEEKS = 4
 const DAYS_FOR_PACE = 90
 const DAYS_FOR_SLEEP = 30
 
@@ -165,6 +174,7 @@ export default async function DashboardPage({
     { data: heatmapSessionsRaw },
     { data: wellness8d },
     { data: todaySessions },
+    { data: projectedLongRuns },
   ] = await Promise.all([
     supabase
       .from('activities')
@@ -312,6 +322,31 @@ export default async function DashboardPage({
           } | null
         }[]
       >(),
+    // Planned long runs in the upcoming PROJECTED_WEEKS weeks (next Mon
+    // through end of week PROJECTED_WEEKS). Feeds the dashed forward bars
+    // on the consistency chart so the long-run trajectory is visible.
+    supabase
+      .from('training_sessions')
+      .select('session_at_local, description')
+      .eq('user_id', user.id)
+      .eq('modality', 'run_long')
+      .eq('status', 'planned')
+      .gte(
+        'session_at',
+        new Date(addWeeks(todayMonday, 1) + 'T00:00:00Z').toISOString(),
+      )
+      .lt(
+        'session_at',
+        new Date(
+          addWeeks(todayMonday, 1 + PROJECTED_WEEKS) + 'T00:00:00Z',
+        ).toISOString(),
+      )
+      .returns<
+        {
+          session_at_local: string
+          description: { target_distance_km?: number } | null
+        }[]
+      >(),
   ])
 
   const activities = rawActivities ?? []
@@ -358,6 +393,79 @@ export default async function DashboardPage({
       weekStart: b.weekStart,
       longestKm: Number((b.longestM / 1000).toFixed(2)),
     }))
+
+  // Consistency chart — last 12 weeks of actuals (stacked easy vs threshold+)
+  // plus 4 projected weeks showing planned long-run km only. Gaps are honest:
+  // weeks with zero runs have null fields so recharts renders no bar at all.
+  const consistencyPastBuckets = weeklyChartBuckets.slice(-WEEKS_FOR_CONSISTENCY)
+  const intensityByWeek = new Map<string, { easyKm: number; thresholdPlusKm: number }>()
+  for (const a of activities) {
+    const wk = weekStartFromStartAt(a.start_at)
+    if (!intensityByWeek.has(wk)) {
+      intensityByWeek.set(wk, { easyKm: 0, thresholdPlusKm: 0 })
+    }
+    const bucket = intensityByWeek.get(wk)!
+    const t = types.get(a.id) ?? 'easy'
+    if (t === 'tempo' || t === 'long' || t === 'race') {
+      bucket.thresholdPlusKm += a.distance_m / 1000
+    } else {
+      bucket.easyKm += a.distance_m / 1000
+    }
+  }
+  const pastConsistency: ConsistencyDatum[] = consistencyPastBuckets.map((b, i, arr) => {
+    const hasRuns = b.runs > 0
+    const split = intensityByWeek.get(b.weekStart)
+    // 4-week rolling avg of total km, looking back from this week (inclusive).
+    const window = arr.slice(Math.max(0, i - 3), i + 1)
+    const rolling = window.length >= 1
+      ? window.reduce((s, w) => s + w.km, 0) / window.length
+      : null
+    return {
+      weekStart: b.weekStart,
+      easyKm: hasRuns ? Number((split?.easyKm ?? 0).toFixed(1)) : null,
+      thresholdPlusKm: hasRuns ? Number((split?.thresholdPlusKm ?? 0).toFixed(1)) : null,
+      projectedKm: null,
+      rolling4wk: rolling != null ? Number(rolling.toFixed(1)) : null,
+      isCurrent: b.weekStart === todayMonday,
+    }
+  })
+
+  // Projected long-runs: next PROJECTED_WEEKS weeks. Index by week Monday.
+  const projectedByMonday = new Map<string, number>()
+  for (const row of projectedLongRuns ?? []) {
+    const ymd = row.session_at_local.slice(0, 10)
+    const monday = mondayOfYmd(ymd)
+    const km = row.description?.target_distance_km
+    if (typeof km === 'number') projectedByMonday.set(monday, km)
+  }
+  const futureConsistency: ConsistencyDatum[] = Array.from(
+    { length: PROJECTED_WEEKS },
+    (_, i) => {
+      const monday = addWeeks(todayMonday, i + 1)
+      const km = projectedByMonday.get(monday) ?? null
+      return {
+        weekStart: monday,
+        easyKm: null,
+        thresholdPlusKm: null,
+        projectedKm: km,
+        rolling4wk: null,
+        isCurrent: false,
+      }
+    },
+  )
+  const consistencyData: ConsistencyDatum[] = [...pastConsistency, ...futureConsistency]
+
+  // Stats: 12-week avg km (only weeks with any run count toward the avg's
+  // denominator — averaging in zeros makes the number meaningless for the
+  // "are you running consistently" question).
+  const pastWithRuns = pastConsistency.filter(d => d.easyKm != null || d.thresholdPlusKm != null)
+  const consistencyAvgKm = pastConsistency.length > 0
+    ? pastConsistency.reduce(
+        (s, d) => s + (d.easyKm ?? 0) + (d.thresholdPlusKm ?? 0),
+        0,
+      ) / pastConsistency.length
+    : 0
+  const consistencyWeeksWithRun = pastWithRuns.length
 
   // Pace trend — last 90d + 7-run rolling
   const paceCutoffMs = now.getTime() - DAYS_FOR_PACE * 86400 * 1000
@@ -641,6 +749,22 @@ export default async function DashboardPage({
         sessions={reviewSessions}
         goals={goalsForReview}
       />
+
+      {/* consistency — 12wk actuals + 4wk projected long-run trajectory */}
+      <section className="mb-4">
+        <ChartCard
+          title="Consistency"
+          meta={`${WEEKS_FOR_CONSISTENCY} wk past · ${PROJECTED_WEEKS} wk projected · km`}
+          foot={<ConsistencyLegend />}
+        >
+          <ConsistencyStats
+            avgKm={consistencyAvgKm}
+            weeksWithRun={consistencyWeeksWithRun}
+            totalWeeks={WEEKS_FOR_CONSISTENCY}
+          />
+          <ConsistencyChart data={consistencyData} />
+        </ChartCard>
+      </section>
 
       {/* trend strip — 2x2 */}
       <section className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">

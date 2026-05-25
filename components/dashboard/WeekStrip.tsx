@@ -34,6 +34,11 @@ export interface SessionDescription {
   target_pace_s_per_km_min?: number
   target_pace_s_per_km_max?: number
   reason?: string
+  // Set on rest-or-do days the user can skip without "missing" anything.
+  // The strip renders these with a dashed dot + "flex" suffix so it's
+  // visually clear they aren't mandatory.
+  flexible?: boolean
+  alternative?: 'rest' | 'easy'
 }
 
 export interface WeekStripProps {
@@ -60,6 +65,8 @@ interface DayItem {
   sessionId: string | null
   /** True when status='planned' and the day has already passed. */
   isMissed: boolean
+  /** True when planned + description.flexible. Renders dashed + "flex" suffix. */
+  isFlex: boolean
 }
 
 interface ItemDetail {
@@ -225,6 +232,15 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
   else if (paceMax) out.push({ label: 'Target pace', value: paceMax })
   if (s.rpe != null) out.push({ label: 'RPE', value: String(s.rpe) })
   if (s.format) out.push({ label: 'Format', value: s.format })
+  if (d?.flexible) {
+    const alt =
+      d.alternative === 'rest'
+        ? 'rest is fine'
+        : d.alternative === 'easy'
+          ? 'easy is fine'
+          : 'optional'
+    out.push({ label: 'Flex', value: alt })
+  }
   if (d?.reason) out.push({ label: 'Why', value: d.reason })
   if (s.notes) out.push({ label: 'Notes', value: s.notes })
   if (s.matched_run) {
@@ -412,6 +428,7 @@ export function WeekStrip({
       details: detailsForRun(r),
       sessionId: null,
       isMissed: false,
+      isFlex: false,
     })
   }
 
@@ -430,16 +447,19 @@ export function WeekStrip({
     // Today's still-planned sessions are not yet missed; they roll over at
     // local midnight.
     const isMissed = status === 'planned' && ymd < todayYmd
+    const isFlex = status === 'planned' && d?.flexible === true
+    const shortLabel = MODALITY_SHORT[s.modality] ?? s.modality
     cell.items.push({
       key: `session-${s.id}`,
       kind: 'session',
       primary,
-      secondary: MODALITY_SHORT[s.modality] ?? s.modality,
+      secondary: isFlex ? `${shortLabel} · flex` : shortLabel,
       dotClass: sessionDotClass(s.modality),
       status,
       details: detailsForSession(s),
       sessionId: s.id,
       isMissed,
+      isFlex,
     })
   }
 
@@ -548,9 +568,11 @@ export function WeekStrip({
                           className={`inline-block w-[6px] h-[6px] mt-[5px] shrink-0 rounded-full ${
                             it.isMissed
                               ? 'border border-warn bg-transparent'
-                              : it.status === 'planned'
-                                ? 'border border-ink-2 bg-transparent'
-                                : it.dotClass
+                              : it.isFlex
+                                ? 'border border-dashed border-ink-2 bg-transparent'
+                                : it.status === 'planned'
+                                  ? 'border border-ink-2 bg-transparent'
+                                  : it.dotClass
                           }`}
                         />
                         <div className="min-w-0 flex-1">
