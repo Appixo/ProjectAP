@@ -11,6 +11,7 @@ interface DailyLogRow {
   wake_time: string | null
   morning_rhr_bpm: number | null
   hrv_ms: number | null
+  energy_score: number | null
   body_weight_kg: number | null
   mood_1_5: number | null
   stress_1_5: number | null
@@ -59,6 +60,7 @@ async function saveTodayLog(formData: FormData) {
       wake_time: timeOrNull(formData.get('wake_time')),
       morning_rhr_bpm: numericOrNull(formData.get('morning_rhr_bpm')),
       hrv_ms: numericOrNull(formData.get('hrv_ms')),
+      energy_score: numericOrNull(formData.get('energy_score')),
       body_weight_kg: numericOrNull(formData.get('body_weight_kg')),
       mood_1_5: numericOrNull(formData.get('mood_1_5')),
       stress_1_5: numericOrNull(formData.get('stress_1_5')),
@@ -129,6 +131,7 @@ export async function DailyLogCard() {
         <FieldGroup label="Body" hint="auto-filled by Tasker">
           <NumInput name="morning_rhr_bpm" label="RHR" defaultValue={existing?.morning_rhr_bpm} min={30} max={120} width="w-14" />
           <NumInput name="hrv_ms" label="HRV" defaultValue={existing?.hrv_ms} min={1} max={200} width="w-14" />
+          <NumInput name="energy_score" label="energy" defaultValue={existing?.energy_score} min={0} max={100} width="w-14" />
           <NumInput name="body_weight_kg" label="wgt" defaultValue={existing?.body_weight_kg} step="0.1" min={40} max={150} width="w-16" />
         </FieldGroup>
 
