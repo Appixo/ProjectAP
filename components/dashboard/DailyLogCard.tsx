@@ -2,7 +2,7 @@ import { revalidatePath } from 'next/cache'
 import { requireOwner } from '@/lib/auth/owner'
 import { todayInAmsterdam } from '@/lib/time/week'
 
-interface DailyLogRow {
+export interface DailyLogRow {
   user_id: string
   log_date: string
   sleep_hours: number | null
@@ -76,6 +76,7 @@ async function saveTodayLog(formData: FormData) {
   )
 
   revalidatePath('/')
+  revalidatePath('/log')
 }
 
 const HABITS = [
@@ -86,18 +87,33 @@ const HABITS = [
 
 const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
-export async function DailyLogCard() {
-  const { supabase, user } = await requireOwner()
+export interface DailyLogCardProps {
+  /** Date to render the form for. Defaults to today (Amsterdam). */
+  logDate?: string
+  /** Existing daily_log row for that date, or null if none yet. If omitted, the card fetches itself. */
+  existing?: DailyLogRow | null
+}
 
-  const today = todayInAmsterdam()
-  const { data: existing } = await supabase
-    .from('daily_log')
-    .select('*')
-    .eq('user_id', user.id)
-    .eq('log_date', today)
-    .maybeSingle<DailyLogRow>()
+export async function DailyLogCard({
+  logDate: propLogDate,
+  existing: propExisting,
+}: DailyLogCardProps = {}) {
+  let logDate = propLogDate
+  let existing = propExisting
 
-  const weekday = WEEKDAY[new Date(today + 'T12:00:00Z').getUTCDay()]
+  if (logDate === undefined || existing === undefined) {
+    const { supabase, user } = await requireOwner()
+    logDate = logDate ?? todayInAmsterdam()
+    const { data } = await supabase
+      .from('daily_log')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('log_date', logDate)
+      .maybeSingle<DailyLogRow>()
+    existing = data ?? null
+  }
+
+  const weekday = WEEKDAY[new Date(logDate + 'T12:00:00Z').getUTCDay()]
   const savedAt = existing?.updated_at
     ? new Date(existing.updated_at).toLocaleTimeString('en-GB', {
         timeZone: 'Europe/Amsterdam',
@@ -119,7 +135,7 @@ export async function DailyLogCard() {
         )}
       </div>
       <form action={saveTodayLog} className="px-4 py-4 space-y-3">
-        <input type="hidden" name="log_date" value={today} />
+        <input type="hidden" name="log_date" value={logDate} />
 
         <FieldGroup label="Sleep" hint="auto-filled by Tasker">
           <NumInput name="sleep_hours" label="hrs" defaultValue={existing?.sleep_hours} step="0.25" min={0} max={14} width="w-14" />

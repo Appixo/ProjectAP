@@ -6,27 +6,7 @@ import {
   nowAmsterdamLocalForInput,
   todayInAmsterdam,
 } from '@/lib/time/week'
-
-interface DailyLogRow {
-  user_id: string
-  log_date: string
-  sleep_hours: number | null
-  sleep_quality_1_5: number | null
-  bedtime: string | null
-  wake_time: string | null
-  morning_rhr_bpm: number | null
-  hrv_ms: number | null
-  body_weight_kg: number | null
-  mood_1_5: number | null
-  stress_1_5: number | null
-  sleep_score: number | null
-  energy: number | null
-  habit_strength_done: boolean
-  habit_no_alcohol: boolean
-  habit_in_bed_on_time: boolean
-  notes: string | null
-  updated_at: string
-}
+import { DailyLogCard, type DailyLogRow } from '@/components/dashboard/DailyLogCard'
 
 interface TrainingSessionRow {
   id: string
@@ -38,12 +18,6 @@ interface TrainingSessionRow {
   format: string | null
   notes: string | null
 }
-
-const HABITS = [
-  { name: 'habit_strength_done', label: 'Strength / mobility done' },
-  { name: 'habit_no_alcohol', label: 'No alcohol' },
-  { name: 'habit_in_bed_on_time', label: 'In bed by target time' },
-] as const
 
 const MODALITIES = [
   { value: 'strength_upper', label: 'Strength upper' },
@@ -66,54 +40,6 @@ function numericOrNull(value: FormDataEntryValue | null): number | null {
   if (s === '') return null
   const n = Number(s)
   return Number.isFinite(n) ? n : null
-}
-
-function timeOrNull(value: FormDataEntryValue | null): string | null {
-  if (value === null) return null
-  const s = String(value).trim()
-  if (!/^\d{2}:\d{2}(:\d{2})?$/.test(s)) return null
-  return s
-}
-
-async function saveLog(formData: FormData) {
-  'use server'
-  const { supabase, user } = await requireOwner()
-
-  const logDate = String(formData.get('log_date') ?? '').trim()
-  if (!logDate) redirect('/log?error=missing_date')
-
-  const notes = String(formData.get('notes') ?? '').trim()
-
-  const { error } = await supabase.from('daily_log').upsert(
-    {
-      user_id: user.id,
-      log_date: logDate,
-      sleep_hours: numericOrNull(formData.get('sleep_hours')),
-      sleep_quality_1_5: numericOrNull(formData.get('sleep_quality_1_5')),
-      bedtime: timeOrNull(formData.get('bedtime')),
-      wake_time: timeOrNull(formData.get('wake_time')),
-      morning_rhr_bpm: numericOrNull(formData.get('morning_rhr_bpm')),
-      hrv_ms: numericOrNull(formData.get('hrv_ms')),
-      body_weight_kg: numericOrNull(formData.get('body_weight_kg')),
-      mood_1_5: numericOrNull(formData.get('mood_1_5')),
-      stress_1_5: numericOrNull(formData.get('stress_1_5')),
-      sleep_score: numericOrNull(formData.get('sleep_score')),
-      energy: numericOrNull(formData.get('energy')),
-      habit_strength_done: formData.get('habit_strength_done') === 'on',
-      habit_no_alcohol: formData.get('habit_no_alcohol') === 'on',
-      habit_in_bed_on_time: formData.get('habit_in_bed_on_time') === 'on',
-      notes: notes === '' ? null : notes,
-      updated_at: new Date().toISOString(),
-    },
-    { onConflict: 'user_id,log_date' },
-  )
-
-  if (error) {
-    redirect(`/log?date=${logDate}&error=${encodeURIComponent(error.message)}`)
-  }
-
-  revalidatePath('/log')
-  redirect(`/log?date=${logDate}&saved=1`)
 }
 
 async function addSession(formData: FormData) {
@@ -189,8 +115,6 @@ export default async function LogPage({
 }: {
   searchParams: Promise<{
     date?: string
-    saved?: string
-    error?: string
     session_saved?: string
     session_error?: string
     session_deleted?: string
@@ -226,255 +150,29 @@ export default async function LogPage({
     <div className="space-y-10 max-w-2xl p-6">
       <h1 className="text-2xl font-semibold text-ink">Daily log</h1>
 
-      <form action={saveLog} className="space-y-6">
+      <form method="GET" action="/log" className="flex items-end gap-3">
         <div className="space-y-1">
-          <label htmlFor="log_date" className="text-sm text-muted">
-            Date
+          <label htmlFor="log_date_picker" className="text-sm text-muted">
+            Edit date
           </label>
           <input
-            id="log_date"
+            id="log_date_picker"
             type="date"
-            name="log_date"
+            name="date"
             defaultValue={date}
             max={todayYmd}
-            required
-            className={inputClass}
+            className={`${inputClass} py-1.5`}
           />
         </div>
-
-        <fieldset className="space-y-3">
-          <legend className="text-base font-semibold text-ink mb-1">Sleep</legend>
-          <p className="text-xs text-muted -mt-1">
-            Hours / bedtime / wake / RHR / HRV auto-fill via Tasker; edit if wrong.
-          </p>
-          <div className="flex items-center gap-3">
-            <label htmlFor="sleep_hours" className="text-sm text-muted w-24">
-              Hours
-            </label>
-            <input
-              id="sleep_hours"
-              type="number"
-              name="sleep_hours"
-              step="0.25"
-              min="0"
-              max="14"
-              defaultValue={existing?.sleep_hours ?? ''}
-              placeholder="7.5"
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="sleep_score" className="text-sm text-muted w-24">
-              Score
-            </label>
-            <input
-              id="sleep_score"
-              type="number"
-              name="sleep_score"
-              min="0"
-              max="100"
-              defaultValue={existing?.sleep_score ?? ''}
-              placeholder="0–100"
-              className={`${inputClass} w-28 py-1.5`}
-            />
-            <span className="text-xs text-muted">
-              Samsung Health sleep score
-            </span>
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="sleep_quality_1_5" className="text-sm text-muted w-24">
-              Quality
-            </label>
-            <div className="flex gap-3">
-              {[1, 2, 3, 4, 5].map(n => (
-                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
-                  <input
-                    type="radio"
-                    name="sleep_quality_1_5"
-                    value={n}
-                    defaultChecked={existing?.sleep_quality_1_5 === n}
-                    className="accent-[var(--color-accent)]"
-                  />
-                  {n}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="bedtime" className="text-sm text-muted w-24">
-              Bedtime
-            </label>
-            <input
-              id="bedtime"
-              type="time"
-              name="bedtime"
-              defaultValue={existing?.bedtime ? existing.bedtime.slice(0, 5) : ''}
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="wake_time" className="text-sm text-muted w-24">
-              Wake
-            </label>
-            <input
-              id="wake_time"
-              type="time"
-              name="wake_time"
-              defaultValue={existing?.wake_time ? existing.wake_time.slice(0, 5) : ''}
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-        </fieldset>
-
-        <fieldset className="space-y-3">
-          <legend className="text-base font-semibold text-ink mb-1">Body</legend>
-          <div className="flex items-center gap-3">
-            <label htmlFor="morning_rhr_bpm" className="text-sm text-muted w-24">
-              RHR (bpm)
-            </label>
-            <input
-              id="morning_rhr_bpm"
-              type="number"
-              name="morning_rhr_bpm"
-              min="30"
-              max="120"
-              defaultValue={existing?.morning_rhr_bpm ?? ''}
-              placeholder="52"
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="hrv_ms" className="text-sm text-muted w-24">
-              HRV (ms)
-            </label>
-            <input
-              id="hrv_ms"
-              type="number"
-              name="hrv_ms"
-              min="1"
-              max="200"
-              defaultValue={existing?.hrv_ms ?? ''}
-              placeholder="48"
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-          <div className="flex items-center gap-3">
-            <label htmlFor="body_weight_kg" className="text-sm text-muted w-24">
-              Weight (kg)
-            </label>
-            <input
-              id="body_weight_kg"
-              type="number"
-              name="body_weight_kg"
-              step="0.1"
-              min="40"
-              max="150"
-              defaultValue={existing?.body_weight_kg ?? ''}
-              placeholder="76.2"
-              className={`${inputClass} w-28 py-1.5`}
-            />
-          </div>
-        </fieldset>
-
-        <fieldset className="space-y-3">
-          <legend className="text-base font-semibold text-ink mb-1">State</legend>
-          <div className="flex items-center gap-3">
-            <label className="text-sm text-muted w-24">Energy</label>
-            <div className="flex gap-3">
-              {[1, 2, 3, 4, 5].map(n => (
-                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
-                  <input
-                    type="radio"
-                    name="energy"
-                    value={n}
-                    defaultChecked={existing?.energy === n}
-                    className="accent-[var(--color-accent)]"
-                  />
-                  {n}
-                </label>
-              ))}
-            </div>
-            <span className="text-xs text-muted">1 wiped → 5 race-ready</span>
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="text-sm text-muted w-24">Mood</label>
-            <div className="flex gap-3">
-              {[1, 2, 3, 4, 5].map(n => (
-                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
-                  <input
-                    type="radio"
-                    name="mood_1_5"
-                    value={n}
-                    defaultChecked={existing?.mood_1_5 === n}
-                    className="accent-[var(--color-accent)]"
-                  />
-                  {n}
-                </label>
-              ))}
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <label className="text-sm text-muted w-24">Stress</label>
-            <div className="flex gap-3">
-              {[1, 2, 3, 4, 5].map(n => (
-                <label key={n} className="flex items-center gap-1 text-sm text-ink-2">
-                  <input
-                    type="radio"
-                    name="stress_1_5"
-                    value={n}
-                    defaultChecked={existing?.stress_1_5 === n}
-                    className="accent-[var(--color-accent)]"
-                  />
-                  {n}
-                </label>
-              ))}
-            </div>
-          </div>
-        </fieldset>
-
-        <fieldset className="space-y-2">
-          <legend className="text-base font-semibold text-ink mb-1">Habits</legend>
-          {HABITS.map(h => (
-            <label key={h.name} className="flex items-center gap-2 text-sm text-ink-2">
-              <input
-                type="checkbox"
-                name={h.name}
-                defaultChecked={Boolean(existing?.[h.name])}
-                className="accent-[var(--color-accent)]"
-              />
-              {h.label}
-            </label>
-          ))}
-        </fieldset>
-
-        <div className="space-y-1">
-          <label htmlFor="notes" className="text-sm text-muted">
-            Notes
-          </label>
-          <textarea
-            id="notes"
-            name="notes"
-            rows={4}
-            defaultValue={existing?.notes ?? ''}
-            className={`${inputClass} w-full`}
-          />
-        </div>
-
-        <div className="flex items-center gap-3">
-          <button
-            type="submit"
-            className="rounded bg-ink text-bg px-4 py-2 text-sm font-medium hover:opacity-90"
-          >
-            Save
-          </button>
-          {sp.saved === '1' && (
-            <span className="text-sm text-success">Saved.</span>
-          )}
-          {sp.error && (
-            <span className="text-sm text-warn">{sp.error}</span>
-          )}
-        </div>
+        <button
+          type="submit"
+          className="rounded border border-border-2 bg-panel text-ink-2 px-3 py-1.5 text-sm hover:bg-bg"
+        >
+          Go
+        </button>
       </form>
+
+      <DailyLogCard logDate={date} existing={existing ?? null} />
 
       <section className="space-y-4 pt-4 border-t border-dashed border-border">
         <div>
