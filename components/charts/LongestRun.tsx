@@ -64,7 +64,8 @@ export function LongestRun({ data }: { data: LongestDatum[] }) {
             axisLine={{ stroke: 'var(--color-muted)' }}
           />
           <YAxis
-            domain={[0, 'dataMax + 4']}
+            domain={[0, (dataMax: number) => Math.max(5, Math.ceil((dataMax + 2) / 5) * 5)]}
+            allowDecimals={false}
             tick={{
               fontFamily: 'var(--font-mono)',
               fontSize: 10,
@@ -72,7 +73,7 @@ export function LongestRun({ data }: { data: LongestDatum[] }) {
             }}
             tickLine={false}
             axisLine={false}
-            width={28}
+            width={36}
           />
           <ReferenceLine
             y={30}

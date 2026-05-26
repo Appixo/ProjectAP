@@ -52,6 +52,7 @@ export function WeeklyMileage({ data }: { data: WeekDatum[] }) {
             axisLine={{ stroke: 'var(--color-muted)' }}
           />
           <YAxis
+            allowDecimals={false}
             tick={{
               fontFamily: 'var(--font-mono)',
               fontSize: 10,
@@ -59,7 +60,7 @@ export function WeeklyMileage({ data }: { data: WeekDatum[] }) {
             }}
             tickLine={false}
             axisLine={false}
-            width={28}
+            width={36}
           />
           <Tooltip
             formatter={value => {
