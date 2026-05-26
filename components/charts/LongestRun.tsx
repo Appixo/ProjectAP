@@ -98,7 +98,10 @@ export function LongestRun({ data }: { data: LongestDatum[] }) {
               borderRadius: 3,
               border: '1px solid var(--color-border)',
               background: 'var(--color-panel)',
+              color: 'var(--color-ink)',
             }}
+            labelStyle={{ color: 'var(--color-muted)' }}
+            itemStyle={{ color: 'var(--color-ink)' }}
           />
           <Line
             type="monotone"
