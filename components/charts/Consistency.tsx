@@ -63,14 +63,14 @@ function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
     >
       <div className="text-ink-2">Week of {String(label)}</div>
       {proj != null ? (
-        <div className="text-faint">planned long {proj.toFixed(1)} km</div>
+        <div className="text-ink-2">planned long {proj.toFixed(1)} km</div>
       ) : (
         <>
           <div className="text-ink">{total.toFixed(1)} km total</div>
-          <div className="text-muted">easy {(easy ?? 0).toFixed(1)} km</div>
-          <div className="text-muted">tempo+ {(thr ?? 0).toFixed(1)} km</div>
+          <div className="text-ink-2">easy {(easy ?? 0).toFixed(1)} km</div>
+          <div className="text-ink-2">tempo+ {(thr ?? 0).toFixed(1)} km</div>
           {rolling != null && (
-            <div className="text-muted">4wk avg {rolling.toFixed(1)} km</div>
+            <div className="text-ink-2">4wk avg {rolling.toFixed(1)} km</div>
           )}
         </>
       )}
