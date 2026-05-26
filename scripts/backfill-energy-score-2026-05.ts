@@ -5,8 +5,9 @@
 // ...) are never touched.
 //
 // 2026-05-25 sleep_hours=9.3 covers total time asleep (9h 18m = 558 min)
-// INCLUDING the morning nap. The column unit is hours (numeric), so the
-// minute value from the watch is converted: 558 / 60 = 9.3.
+// INCLUDING the morning nap. 2026-05-26 sleep_hours=3.85 is main sleep only
+// (3h 51m = 231 min, no nap shown). The column unit is hours (numeric), so
+// the minute values from the watch are converted: 558/60=9.3, 231/60=3.85.
 //
 // Run with: pnpm tsx scripts/backfill-energy-score-2026-05.ts
 
@@ -30,7 +31,7 @@ if (!ALLOWED_EMAIL || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
 
 const ENTRIES: Array<{ log_date: string; patch: Record<string, number> }> = [
   { log_date: '2026-05-25', patch: { energy_score: 82, sleep_hours: 9.3 } },
-  { log_date: '2026-05-26', patch: { energy_score: 78 } },
+  { log_date: '2026-05-26', patch: { energy_score: 78, sleep_hours: 3.85 } },
 ]
 
 async function main() {
