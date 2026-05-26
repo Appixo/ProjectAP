@@ -1,7 +1,12 @@
-// One-off: backfill Samsung Energy Score for 2026-05-25 and 2026-05-26.
-// Idempotent — upserts by (user_id, log_date), updating ONLY energy_score
-// when the row already exists, so other fields (sleep, RHR, HRV, notes,
-// the subjective `energy` 1-5, habits, ...) are never touched.
+// One-off: backfill morning wellness numbers from Samsung Health screens
+// for 2026-05-25 and 2026-05-26. Idempotent — upserts by (user_id, log_date)
+// and only the fields listed in each entry's `patch` are written, so other
+// columns (sleep_score, the subjective `energy` 1-5, habits, RHR/HRV, notes,
+// ...) are never touched.
+//
+// 2026-05-25 sleep_hours=9.3 covers total time asleep (9h 18m = 558 min)
+// INCLUDING the morning nap. The column unit is hours (numeric), so the
+// minute value from the watch is converted: 558 / 60 = 9.3.
 //
 // Run with: pnpm tsx scripts/backfill-energy-score-2026-05.ts
 
@@ -23,9 +28,9 @@ if (!ALLOWED_EMAIL || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
   process.exit(1)
 }
 
-const ENTRIES: Array<{ log_date: string; energy_score: number }> = [
-  { log_date: '2026-05-25', energy_score: 82 },
-  { log_date: '2026-05-26', energy_score: 78 },
+const ENTRIES: Array<{ log_date: string; patch: Record<string, number> }> = [
+  { log_date: '2026-05-25', patch: { energy_score: 82, sleep_hours: 9.3 } },
+  { log_date: '2026-05-26', patch: { energy_score: 78 } },
 ]
 
 async function main() {
@@ -50,35 +55,39 @@ async function main() {
   }
   console.log(`Owner user_id: ${userId}`)
 
-  for (const { log_date, energy_score } of ENTRIES) {
+  for (const { log_date, patch } of ENTRIES) {
     const { error } = await supabase
       .from('daily_log')
       .upsert(
-        { user_id: userId, log_date, energy_score },
+        { user_id: userId, log_date, ...patch },
         { onConflict: 'user_id,log_date' },
       )
     if (error) {
       throw new Error(`upsert ${log_date} failed: ${error.message}`)
     }
-    console.log(`Upserted ${log_date} -> energy_score=${energy_score}`)
+    const pretty = Object.entries(patch)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(', ')
+    console.log(`Upserted ${log_date} -> ${pretty}`)
   }
 
   // Verify: show the last 7 daily_log rows so the user can eyeball the
   // backfill landed and nothing else changed.
   const { data: rows, error: selectError } = await supabase
     .from('daily_log')
-    .select('log_date, energy_score, sleep_score, energy, morning_rhr_bpm, hrv_ms')
+    .select('log_date, energy_score, sleep_hours, sleep_score, energy, morning_rhr_bpm, hrv_ms')
     .eq('user_id', userId)
     .order('log_date', { ascending: false })
     .limit(7)
 
   if (selectError) throw new Error(`select failed: ${selectError.message}`)
   console.log('\nLast daily_log rows:')
-  console.log('  date        energy_score  sleep_score  energy(1-5)  RHR   HRV')
+  console.log('  date        energy_score  sleep_hrs  sleep_score  energy(1-5)  RHR   HRV')
   for (const r of rows ?? []) {
     const cells = [
       r.log_date,
       String(r.energy_score ?? '—').padStart(12),
+      String(r.sleep_hours ?? '—').padStart(9),
       String(r.sleep_score ?? '—').padStart(11),
       String(r.energy ?? '—').padStart(11),
       String(r.morning_rhr_bpm ?? '—').padStart(4),
