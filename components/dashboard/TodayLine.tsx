@@ -94,7 +94,7 @@ export function TodayLine({
 
   const wellnessParts: string[] = []
   if (wellness?.sleep_hours != null) {
-    wellnessParts.push(`${wellness.sleep_hours.toFixed(1)} h`)
+    wellnessParts.push(`slept ${wellness.sleep_hours.toFixed(1)} h`)
   }
   if (wellness?.morning_rhr_bpm != null) {
     const delta =
