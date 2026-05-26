@@ -512,22 +512,48 @@ export default async function DashboardPage({
       ? Math.round((rollingNow - paceFirst) * 60)
       : null
 
-  // Sleep — last 30 days with non-null hours
-  const sleepData: SleepDatum[] = (sleepLogs ?? [])
-    .filter(
-      (l): l is { log_date: string; sleep_hours: number } =>
-        l.sleep_hours !== null,
-    )
-    .map(l => ({ log_date: l.log_date, sleep_hours: l.sleep_hours }))
+  // Sleep — pad to a fixed 30-day window so the x-axis spans the configured
+  // range even when most days are unlogged. Missing days render as gaps in
+  // the daily line (null breaks the path); the 7-day rolling line is computed
+  // here and only emitted when the window has >=3 samples.
+  const sleepByDate = new Map<string, number>()
+  for (const l of sleepLogs ?? []) {
+    if (l.sleep_hours !== null) sleepByDate.set(l.log_date, l.sleep_hours)
+  }
+  const sleepWindow: { log_date: string; sleep_hours: number | null }[] = []
+  for (let i = DAYS_FOR_SLEEP - 1; i >= 0; i--) {
+    const ymd = addDays(todayYmd, -i)
+    sleepWindow.push({
+      log_date: ymd,
+      sleep_hours: sleepByDate.get(ymd) ?? null,
+    })
+  }
+  const sleepData: SleepDatum[] = sleepWindow.map((d, idx) => {
+    const window = sleepWindow
+      .slice(Math.max(0, idx - 6), idx + 1)
+      .map(w => w.sleep_hours)
+      .filter((n): n is number => n !== null)
+    const rolling =
+      window.length >= 3
+        ? window.reduce((s, n) => s + n, 0) / window.length
+        : null
+    return { log_date: d.log_date, sleep_hours: d.sleep_hours, rolling }
+  })
 
+  const sleepValues = sleepData
+    .map(d => d.sleep_hours)
+    .filter((n): n is number => n !== null)
   const sleepAvg30 =
-    sleepData.length > 0
-      ? sleepData.reduce((s, d) => s + d.sleep_hours, 0) / sleepData.length
+    sleepValues.length > 0
+      ? sleepValues.reduce((s, n) => s + n, 0) / sleepValues.length
       : null
   const sleepAvg7 = (() => {
-    const last7 = sleepData.slice(-7)
+    const last7 = sleepData
+      .slice(-7)
+      .map(d => d.sleep_hours)
+      .filter((n): n is number => n !== null)
     if (last7.length === 0) return null
-    return last7.reduce((s, d) => s + d.sleep_hours, 0) / last7.length
+    return last7.reduce((s, n) => s + n, 0) / last7.length
   })()
 
   // Footers for charts
