@@ -72,6 +72,9 @@ interface RawDailyLog {
   sleep_hours: number | null
   sleep_score: number | null
   energy: number | null
+  morning_rhr_bpm: number | null
+  hrv_ms: number | null
+  energy_score: number | null
   habit_strength_done: boolean
   habit_no_alcohol: boolean
   habit_in_bed_on_time: boolean
@@ -229,13 +232,15 @@ export default async function DashboardPage({
       .gte('log_date', sleepCutoffYmd)
       .order('log_date', { ascending: true })
       .returns<{ log_date: string; sleep_hours: number | null }[]>(),
+    // Two-week window so WeekReview can compute 7d-vs-prior-7d recovery deltas.
+    // Split by `log_date < lastWeekMonday` below into prior + last week.
     supabase
       .from('daily_log')
       .select(
-        'log_date, sleep_hours, sleep_score, energy, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
+        'log_date, sleep_hours, sleep_score, energy, morning_rhr_bpm, hrv_ms, energy_score, habit_strength_done, habit_no_alcohol, habit_in_bed_on_time',
       )
       .eq('user_id', user.id)
-      .gte('log_date', lastWeekMonday)
+      .gte('log_date', addWeeks(lastWeekMonday, -1))
       .lt('log_date', todayMonday)
       .order('log_date', { ascending: true })
       .returns<RawDailyLog[]>(),
@@ -568,15 +573,26 @@ export default async function DashboardPage({
     average_speed_mps: r.average_speed_mps,
     runType: r.runType,
   }))
-  const reviewLogs: WeekReviewLog[] = (lastWeekLogs ?? []).map(l => ({
+  const mapToReviewLog = (l: RawDailyLog): WeekReviewLog => ({
     log_date: l.log_date,
     sleep_hours: l.sleep_hours,
     sleep_score: l.sleep_score,
     energy: l.energy,
+    morning_rhr_bpm: l.morning_rhr_bpm,
+    hrv_ms: l.hrv_ms,
+    energy_score: l.energy_score,
     habit_strength_done: l.habit_strength_done,
     habit_no_alcohol: l.habit_no_alcohol,
     habit_in_bed_on_time: l.habit_in_bed_on_time,
-  }))
+  })
+  // `lastWeekLogs` now spans 14 days (prior week + last week). Split on
+  // lastWeekMonday so the WeekReview recovery tiles can diff 7d vs prior 7d.
+  const reviewLogs: WeekReviewLog[] = (lastWeekLogs ?? [])
+    .filter(l => l.log_date >= lastWeekMonday)
+    .map(mapToReviewLog)
+  const priorReviewLogs: WeekReviewLog[] = (lastWeekLogs ?? [])
+    .filter(l => l.log_date < lastWeekMonday)
+    .map(mapToReviewLog)
 
   const stripSessionsList = stripSessionsRaw ?? []
   const lastWeekSessions = lastWeekSessionsRaw ?? []
@@ -746,6 +762,7 @@ export default async function DashboardPage({
         thisWeek={reviewThisWeek}
         lastWeek={reviewActivities}
         logs={reviewLogs}
+        priorWeekLogs={priorReviewLogs}
         sessions={reviewSessions}
         goals={goalsForReview}
       />

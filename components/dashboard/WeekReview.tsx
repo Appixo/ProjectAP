@@ -16,6 +16,9 @@ export interface WeekReviewLog {
   sleep_hours: number | null
   sleep_score: number | null
   energy: number | null
+  morning_rhr_bpm: number | null
+  hrv_ms: number | null
+  energy_score: number | null
   habit_strength_done: boolean
   habit_no_alcohol: boolean
   habit_in_bed_on_time: boolean
@@ -44,7 +47,10 @@ export interface WeekReviewProps {
   weekLabel: string
   thisWeek: WeekReviewActivity[]
   lastWeek: WeekReviewActivity[]
+  /** Daily logs from the week under review (the 7 days that drive the recovery tiles). */
   logs: WeekReviewLog[]
+  /** Daily logs from the 7 days immediately before `logs`, used to compute deltas. */
+  priorWeekLogs: WeekReviewLog[]
   sessions: WeekReviewSession[]
   goals: WeekReviewGoals | null
 }
@@ -54,6 +60,59 @@ const WEEKDAY = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 function avg(nums: number[]): number | null {
   if (nums.length === 0) return null
   return nums.reduce((s, n) => s + n, 0) / nums.length
+}
+
+/** Recovery tiles need a stable read; require 3 samples in the 7-day window
+ * before showing a number, otherwise the tile renders "—". */
+function avgMinSamples(nums: number[], minSamples: number): number | null {
+  if (nums.length < minSamples) return null
+  return nums.reduce((s, n) => s + n, 0) / nums.length
+}
+
+interface RecoveryTile {
+  label: string
+  /** 7-day avg, or null when under-sampled. */
+  value: number | null
+  delta: number | null
+  decimals: number
+  /** Direction that means "improving" — for RHR going down is good. */
+  goodDir: 'up' | 'down'
+  unit?: string
+}
+
+function buildRecoveryTile(
+  label: string,
+  current: WeekReviewLog[],
+  prior: WeekReviewLog[],
+  pick: (l: WeekReviewLog) => number | null,
+  goodDir: 'up' | 'down',
+  decimals: number,
+  unit?: string,
+): RecoveryTile {
+  const curr = current.map(pick).filter((n): n is number => n !== null)
+  const prev = prior.map(pick).filter((n): n is number => n !== null)
+  const currAvg = avgMinSamples(curr, 3)
+  const prevAvg = avgMinSamples(prev, 3)
+  return {
+    label,
+    value: currAvg,
+    delta: currAvg !== null && prevAvg !== null ? currAvg - prevAvg : null,
+    decimals,
+    goodDir,
+    unit,
+  }
+}
+
+function deltaClass(delta: number, goodDir: 'up' | 'down'): string {
+  if (delta === 0) return 'text-muted'
+  const improving = goodDir === 'up' ? delta > 0 : delta < 0
+  return improving ? 'text-success' : 'text-warn'
+}
+
+function formatDelta(delta: number, decimals: number): string {
+  const rounded = decimals === 0 ? Math.round(delta) : Number(delta.toFixed(decimals))
+  const sign = rounded > 0 ? '+' : ''
+  return `${sign}${decimals === 0 ? rounded : rounded.toFixed(decimals)} vs 7d`
 }
 
 function fmtDelta(p: number | null): {
@@ -88,6 +147,7 @@ export function WeekReview({
   thisWeek,
   lastWeek,
   logs,
+  priorWeekLogs,
   sessions,
   goals,
 }: WeekReviewProps) {
@@ -137,15 +197,12 @@ export function WeekReview({
 
   const mobilityCount = sessions.filter(s => s.modality === 'mobility').length
 
-  const sleepAvg = avg(
-    logs.map(l => l.sleep_hours).filter((n): n is number => n !== null),
-  )
-  const sleepScoreAvg = avg(
-    logs.map(l => l.sleep_score).filter((n): n is number => n !== null),
-  )
-  const energyAvg = avg(
-    logs.map(l => l.energy).filter((n): n is number => n !== null),
-  )
+  const recoveryTiles: RecoveryTile[] = [
+    buildRecoveryTile('Sleep', logs, priorWeekLogs, l => l.sleep_hours, 'up', 1, 'h'),
+    buildRecoveryTile('RHR', logs, priorWeekLogs, l => l.morning_rhr_bpm, 'down', 0, ' bpm'),
+    buildRecoveryTile('HRV', logs, priorWeekLogs, l => l.hrv_ms, 'up', 0, ' ms'),
+    buildRecoveryTile('Energy', logs, priorWeekLogs, l => l.energy_score, 'up', 0),
+  ]
 
   const delta = fmtDelta(wowVsPrev)
 
@@ -163,6 +220,45 @@ export function WeekReview({
             {weekLabel}
           </span>
         </div>
+      </div>
+
+      {/* RECOVERY — 7d avg + delta vs prior 7d */}
+      <div className="grid grid-cols-4 border-b border-border">
+        {recoveryTiles.map((t, i) => (
+          <div
+            key={t.label}
+            className={`px-5 py-3 ${i < recoveryTiles.length - 1 ? 'border-r border-border' : ''}`}
+          >
+            <div className="text-[10px] uppercase tracking-[0.12em] text-muted font-semibold">
+              {t.label}
+            </div>
+            {t.value === null ? (
+              <div className="font-mono text-[17px] text-faint -tracking-[0.02em] mt-px">
+                —
+              </div>
+            ) : (
+              <>
+                <div className="font-mono text-[17px] text-ink -tracking-[0.02em] mt-px">
+                  {t.value.toFixed(t.decimals)}
+                  {t.unit && (
+                    <span className="text-[12px] text-muted tracking-normal ml-0.5">
+                      {t.unit}
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] mt-0.5">
+                  {t.delta === null ? (
+                    <span className="text-faint">no prior week</span>
+                  ) : (
+                    <span className={deltaClass(t.delta, t.goodDir)}>
+                      {formatDelta(t.delta, t.decimals)}
+                    </span>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        ))}
       </div>
 
       <div className="grid grid-cols-[1.15fr_1fr_1fr_1fr]">
@@ -298,38 +394,6 @@ export function WeekReview({
                 </>
               ) : (
                 <span className="text-faint text-[14px] font-normal">none</span>
-              )
-            }
-          />
-          <Stat
-            k="Sleep"
-            v={
-              sleepAvg !== null ? (
-                <>
-                  {sleepAvg.toFixed(1)} h
-                  {sleepScoreAvg !== null && (
-                    <span className="text-[12px] text-muted tracking-normal ml-1.5">
-                      score {Math.round(sleepScoreAvg)} avg
-                    </span>
-                  )}
-                </>
-              ) : (
-                '—'
-              )
-            }
-          />
-          <Stat
-            k="Energy"
-            v={
-              energyAvg !== null ? (
-                <>
-                  {energyAvg.toFixed(1)}{' '}
-                  <span className="text-[12px] text-muted tracking-normal ml-1.5">
-                    / 5
-                  </span>
-                </>
-              ) : (
-                '—'
               )
             }
           />
