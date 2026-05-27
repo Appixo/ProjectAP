@@ -154,6 +154,68 @@ console.log(`\n=== 10. Verify row is gone from /api/export ===`)
   expect('test row absent from /api/export', !row)
 }
 
+console.log(`\n=== 11. GET /api/sessions/last — modality validation ===`)
+{
+  const r = await http('GET', '/api/sessions/last')
+  expect('400 invalid_modality (missing)', r.status === 400 && r.json?.error === 'invalid_modality')
+  const r2 = await http('GET', '/api/sessions/last?modality=not_a_modality')
+  expect('400 invalid_modality (bogus)', r2.status === 400 && r2.json?.error === 'invalid_modality')
+}
+
+console.log(`\n=== 12. GET /api/sessions/last — round trip with a fresh row ===`)
+{
+  // Create a unique strength session in the recent past so the lookup is
+  // deterministic regardless of what's already in the DB. session_at_local
+  // is yesterday at 17:00, status='completed'.
+  const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10)
+  const create = await http('POST', '/api/sessions', [{
+    session_at_local: `${yesterday}T17:00`,
+    modality: 'strength_upper',
+    status: 'completed',
+    duration_min: 42,
+    format: 'A: press · B: row · C: curl',
+    description: {
+      exercises: [
+        { name: 'Overhead press', sets: 4, reps: '6', weight: '45 kg', rest_s: 150 },
+        { name: 'Barbell row',    sets: 4, reps: '8', weight: '60 kg', rest_s: 120 },
+        { name: 'Hammer curl',    sets: 3, reps: '10', weight: '14 kg DBs', rest_s: 60 },
+      ],
+    },
+  }])
+  expect('POST seed 201', create.status === 201)
+  const seedId = create.json?.sessions?.[0]?.id
+
+  const r = await http('GET', '/api/sessions/last?modality=strength_upper')
+  expect('200 OK', r.status === 200)
+  expect('returns the seeded row',
+    r.json?.session?.id === seedId,
+    `expected ${seedId}, got ${r.json?.session?.id}`)
+  expect('format round-trips', r.json?.session?.format === 'A: press · B: row · C: curl')
+  expect('duration_min round-trips', r.json?.session?.duration_min === 42)
+  expect('exercises round-trip',
+    r.json?.session?.description?.exercises?.length === 3 &&
+    r.json.session.description.exercises[0].name === 'Overhead press')
+
+  // Cleanup
+  const del = await http('DELETE', `/api/sessions/${seedId}`)
+  expect('cleanup DELETE ok', del.status === 200)
+}
+
+console.log(`\n=== 13. GET /api/sessions/last — 404 when no prior row exists ===`)
+{
+  // 'rest' is rarely written in this app (rest days are typically just empty
+  // slots). If the DB happens to have one, this check will spuriously pass
+  // as 200 — skip non-strictly in that case.
+  const r = await http('GET', '/api/sessions/last?modality=rest')
+  if (r.status === 200) {
+    console.log(`  ~ skip: 'rest' modality has prior rows in DB, can't assert 404`)
+  } else {
+    expect('404 not_found', r.status === 404 && r.json?.error === 'not_found')
+  }
+}
+
 console.log(`\n──────────────────────────────────`)
 console.log(`PASS ${pass}  FAIL ${fail}`)
 process.exit(fail === 0 ? 0 : 1)

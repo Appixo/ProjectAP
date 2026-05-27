@@ -2,11 +2,11 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import { requireOwner } from '@/lib/auth/owner'
 import {
-  amsterdamWallClockToUtcIso,
   nowAmsterdamLocalForInput,
   todayInAmsterdam,
 } from '@/lib/time/week'
 import { DailyLogCard, type DailyLogRow } from '@/components/dashboard/DailyLogCard'
+import { LogSessionForm } from '@/components/dashboard/LogSessionForm'
 
 interface TrainingSessionRow {
   id: string
@@ -19,65 +19,15 @@ interface TrainingSessionRow {
   notes: string | null
 }
 
-const MODALITIES = [
-  { value: 'strength_upper', label: 'Strength upper' },
-  { value: 'strength_lower', label: 'Strength lower' },
-  { value: 'strength_full', label: 'Strength full' },
-  { value: 'football', label: 'Football' },
-  { value: 'cycling', label: 'Cycling' },
-  { value: 'swimming', label: 'Swimming' },
-  { value: 'mobility', label: 'Mobility' },
-  { value: 'other', label: 'Other' },
-] as const
-
-const MODALITY_LABEL: Record<string, string> = Object.fromEntries(
-  MODALITIES.map(m => [m.value, m.label]),
-)
-
-function numericOrNull(value: FormDataEntryValue | null): number | null {
-  if (value === null) return null
-  const s = String(value).trim()
-  if (s === '') return null
-  const n = Number(s)
-  return Number.isFinite(n) ? n : null
-}
-
-async function addSession(formData: FormData) {
-  'use server'
-  const { supabase, user } = await requireOwner()
-
-  const sessionAtLocal = String(formData.get('session_at_local') ?? '').trim()
-  const modality = String(formData.get('modality') ?? '').trim()
-  if (!sessionAtLocal || !modality) {
-    redirect('/log?session_error=missing_fields')
-  }
-
-  const utcIso = amsterdamWallClockToUtcIso(sessionAtLocal)
-  const padded =
-    sessionAtLocal.length === 16 ? sessionAtLocal + ':00' : sessionAtLocal
-
-  const format = String(formData.get('format') ?? '').trim() || null
-  const notes = String(formData.get('notes') ?? '').trim() || null
-
-  const { error } = await supabase.from('training_sessions').insert({
-    user_id: user.id,
-    session_at: utcIso,
-    session_at_local: padded,
-    timezone: 'Europe/Amsterdam',
-    modality,
-    duration_min: numericOrNull(formData.get('duration_min')),
-    rpe: numericOrNull(formData.get('rpe')),
-    format,
-    notes,
-  })
-
-  if (error) {
-    redirect(`/log?session_error=${encodeURIComponent(error.message)}`)
-  }
-
-  revalidatePath('/log')
-  revalidatePath('/')
-  redirect('/log?session_saved=1')
+const MODALITY_LABEL: Record<string, string> = {
+  strength_upper: 'Strength upper',
+  strength_lower: 'Strength lower',
+  strength_full: 'Strength full',
+  football: 'Football',
+  cycling: 'Cycling',
+  swimming: 'Swimming',
+  mobility: 'Mobility',
+  other: 'Other',
 }
 
 async function deleteSession(formData: FormData) {
@@ -115,8 +65,6 @@ export default async function LogPage({
 }: {
   searchParams: Promise<{
     date?: string
-    session_saved?: string
-    session_error?: string
     session_deleted?: string
   }>
 }) {
@@ -182,117 +130,10 @@ export default async function LogPage({
           </p>
         </div>
 
-        <form action={addSession} className="space-y-5">
-          <div className="space-y-1">
-            <label htmlFor="session_at_local" className="text-sm text-muted">
-              When
-            </label>
-            <input
-              id="session_at_local"
-              type="datetime-local"
-              name="session_at_local"
-              defaultValue={nowAmsterdamLocalForInput()}
-              required
-              className={inputClass}
-            />
-          </div>
-
-          <fieldset className="space-y-2">
-            <legend className="text-sm text-muted mb-1">Modality</legend>
-            <div className="flex flex-wrap gap-3">
-              {MODALITIES.map(m => (
-                <label
-                  key={m.value}
-                  className="flex items-center gap-1.5 text-sm text-ink-2"
-                >
-                  <input
-                    type="radio"
-                    name="modality"
-                    value={m.value}
-                    required
-                    className="accent-[var(--color-accent)]"
-                  />
-                  {m.label}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-
-          <div className="flex flex-wrap gap-4">
-            <div className="space-y-1">
-              <label htmlFor="duration_min" className="text-sm text-muted">
-                Duration (min)
-              </label>
-              <input
-                id="duration_min"
-                type="number"
-                name="duration_min"
-                min="1"
-                max="600"
-                placeholder="50"
-                className={`${inputClass} w-28`}
-              />
-            </div>
-            <div className="space-y-1">
-              <label htmlFor="rpe" className="text-sm text-muted">
-                RPE (1–10)
-              </label>
-              <input
-                id="rpe"
-                type="number"
-                name="rpe"
-                min="1"
-                max="10"
-                placeholder="7"
-                className={`${inputClass} w-24`}
-              />
-            </div>
-            <div className="space-y-1 flex-1 min-w-[12rem]">
-              <label htmlFor="format" className="text-sm text-muted">
-                Format (optional)
-              </label>
-              <input
-                id="format"
-                type="text"
-                name="format"
-                placeholder="6v6 2×25min · upper push/pull · etc."
-                maxLength={80}
-                className={`${inputClass} w-full`}
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1">
-            <label htmlFor="session_notes" className="text-sm text-muted">
-              Notes
-            </label>
-            <textarea
-              id="session_notes"
-              name="notes"
-              rows={3}
-              placeholder="Felt heavy after the deload week. Right calf tight."
-              className={`${inputClass} w-full`}
-            />
-          </div>
-
-          <div className="flex items-center gap-3">
-            <button
-              type="submit"
-              className="rounded bg-ink text-bg px-4 py-2 text-sm font-medium hover:opacity-90"
-            >
-              Add session
-            </button>
-            {sp.session_saved === '1' && (
-              <span className="text-sm text-success">Session logged.</span>
-            )}
-            {sp.session_deleted === '1' && (
-              <span className="text-sm text-muted">Session deleted.</span>
-            )}
-            {sp.session_error && (
-              <span className="text-sm text-warn">{sp.session_error}</span>
-            )}
-          </div>
-        </form>
+        <LogSessionForm defaultDateTimeLocal={nowAmsterdamLocalForInput()} />
+        {sp.session_deleted === '1' && (
+          <p className="text-sm text-muted">Session deleted.</p>
+        )}
 
         {recentSessions && recentSessions.length > 0 && (
           <div className="overflow-x-auto">
