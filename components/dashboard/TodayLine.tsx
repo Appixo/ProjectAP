@@ -9,6 +9,8 @@ export interface TodayLineSession {
   target_hr_min?: number | null
   target_hr_max?: number | null
   status: 'planned' | 'completed' | 'skipped' | null
+  /** Count of prescription rows in description.exercises (strength sessions). */
+  exercise_count?: number | null
 }
 
 export interface TodayLineWellness {
@@ -61,6 +63,11 @@ function renderSession(s: TodayLineSession): string {
   const parts: string[] = [MODALITY_LABEL[s.modality] ?? s.modality]
   if (s.target_distance_km != null) parts.push(`${s.target_distance_km} km`)
   else if (s.target_duration_min != null) parts.push(`${s.target_duration_min} min`)
+  else if (s.exercise_count != null && s.exercise_count > 0) {
+    // No km/duration prescription (typical strength session) — surface the
+    // exercise count so the line still says something concrete.
+    parts.push(`${s.exercise_count} exercise${s.exercise_count === 1 ? '' : 's'}`)
+  }
   if (s.target_hr_min != null && s.target_hr_max != null) {
     parts.push(`@ HR ${s.target_hr_min}–${s.target_hr_max}`)
   }

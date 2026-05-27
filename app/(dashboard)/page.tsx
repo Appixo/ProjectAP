@@ -324,6 +324,7 @@ export default async function DashboardPage({
             target_duration_min?: number
             target_hr_min?: number
             target_hr_max?: number
+            exercises?: unknown[]
           } | null
         }[]
       >(),
@@ -743,6 +744,9 @@ export default async function DashboardPage({
       target_hr_min: s.description?.target_hr_min ?? null,
       target_hr_max: s.description?.target_hr_max ?? null,
       status: s.status,
+      exercise_count: Array.isArray(s.description?.exercises)
+        ? s.description.exercises.length
+        : null,
     }))
 
   return (

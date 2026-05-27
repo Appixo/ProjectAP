@@ -148,6 +148,8 @@ const SCHEMA = {
         target_pace_s_per_km_min: 'integer 120-900 (seconds per km, lower bound = faster)',
         target_pace_s_per_km_max: 'integer 120-900',
         reason: 'string up to 500 chars — one-line rationale',
+        exercises:
+          "array of { name: string<=100, sets: integer 1-50, reps: string<=40, weight?: string<=40, rest_s?: integer 0-1800 } — prescription rows for strength sessions. reps and weight are STRINGS so prescriptions can use ranges and words ('8-12', '10/side', 'bodyweight', '5-7.5 kg'). v1 is prescription-only; a future 'actual performed' log will be a separate numeric field.",
       },
       optional: true,
       note: 'Plan metadata. Set on planned workouts so the dashboard tooltip + AI coach reading the export both see the prescription.',
@@ -549,7 +551,7 @@ export async function GET(request: NextRequest) {
           status:
             "string, one of: planned, completed, skipped (optional, default 'completed'). Use 'planned' for future plan rows.",
           description:
-            'object (optional) — { target_distance_km, target_duration_min, target_hr_min, target_hr_max, target_pace_s_per_km_min, target_pace_s_per_km_max, reason }. See context.schema.training_sessions.description for full spec.',
+            'object (optional) — { target_distance_km, target_duration_min, target_hr_min, target_hr_max, target_pace_s_per_km_min, target_pace_s_per_km_max, reason, exercises[{name, sets, reps, weight?, rest_s?}] }. See context.schema.training_sessions.description for full spec.',
         },
         example_body_single: {
           session_at_local: `${today}T18:30`,
@@ -574,9 +576,53 @@ export async function GET(request: NextRequest) {
             },
           },
         ],
+        example_body_strength: {
+          session_at_local: `${today}T17:00`,
+          modality: 'strength_lower',
+          status: 'planned',
+          format: 'A: squat · B: RDL · C: split squat · D: calf raise',
+          description: {
+            reason: 'Block 1, week 2 — strength base.',
+            exercises: [
+              { name: 'Back squat', sets: 4, reps: '5', weight: '80 kg', rest_s: 180 },
+              { name: 'Romanian deadlift', sets: 3, reps: '8', weight: '70 kg', rest_s: 120 },
+              { name: 'Bulgarian split squat', sets: 3, reps: '10/side', weight: '16 kg DBs', rest_s: 90 },
+              { name: 'Standing calf raise', sets: 3, reps: '12-15', weight: 'bodyweight', rest_s: 60 },
+            ],
+          },
+        },
         notes: auth.canWrite
-          ? "POST a JSON body matching body_schema. Send a single object for one session, or an array (max 100) to upload a planned block. Existing rows are not updated by POST — to revise a planned workout, hit the /log UI or (future) PATCH endpoint."
+          ? "POST a JSON body matching body_schema. Send a single object for one session, or an array (max 100) to upload a planned block. To revise or remove an existing row, see related_endpoints below."
           : 'This token is read-only. Use a token with write scope, or call from the logged-in browser session.',
+        related_endpoints: {
+          patch: {
+            url_pattern: urlPatternFor('/api/sessions/{id}'),
+            method: 'PATCH',
+            content_type: 'application/json',
+            body_schema:
+              'Partial of the POST body_schema. Only fields present in the body are updated; omitted fields are left untouched. `description` is REPLACED whole (no deep-merge) — to clear a field inside it, re-send the full object without that field.',
+            example_body: {
+              status: 'completed',
+              rpe: 7,
+              duration_min: 55,
+            },
+            notes:
+              'Use this to fix a planned session in place instead of deleting + re-POSTing. 404 if the id does not exist or belongs to another user.',
+          },
+          delete: {
+            url_pattern: urlPatternFor('/api/sessions/{id}'),
+            method: 'DELETE',
+            notes:
+              'Hard delete a single row. Idempotent-friendly: a second DELETE on the same id returns 404, not 500. Returns { ok: true, deleted: <id> }.',
+          },
+          reschedule: {
+            url_pattern: urlPatternFor('/api/sessions/{id}/reschedule'),
+            method: 'POST',
+            body_schema: { action: "'complete' | 'skip' | 'next_rest_day'" },
+            notes:
+              "One-tap actions: 'complete' marks done, 'skip' marks skipped, 'next_rest_day' moves the row to the next day in the next 14 with no other non-skipped session.",
+          },
+        },
       },
       daily_logs: {
         url: writeUrlFor('/api/daily-logs'),

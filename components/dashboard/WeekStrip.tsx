@@ -34,11 +34,22 @@ export interface SessionDescription {
   target_pace_s_per_km_min?: number
   target_pace_s_per_km_max?: number
   reason?: string
+  // Strength prescription rows. Renders as a small table in the popover;
+  // when present, replaces the free-text `notes` line.
+  exercises?: SessionExercise[]
   // Set on rest-or-do days the user can skip without "missing" anything.
   // The strip renders these with a dashed dot + "flex" suffix so it's
   // visually clear they aren't mandatory.
   flexible?: boolean
   alternative?: 'rest' | 'easy'
+}
+
+export interface SessionExercise {
+  name: string
+  sets: number
+  reps: string
+  weight?: string
+  rest_s?: number
 }
 
 export interface WeekStripProps {
@@ -61,6 +72,8 @@ interface DayItem {
   dotClass: string
   status: 'planned' | 'completed' | 'skipped'
   details: ItemDetail[] | null
+  /** Structured prescription rows shown as a table in the popover. */
+  exercises: SessionExercise[] | null
   /** Session id when kind='session'. Null for runs. Used for reschedule. */
   sessionId: string | null
   /** True when status='planned' and the day has already passed. */
@@ -242,7 +255,10 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
     out.push({ label: 'Flex', value: alt })
   }
   if (d?.reason) out.push({ label: 'Why', value: d.reason })
-  if (s.notes) out.push({ label: 'Notes', value: s.notes })
+  // Notes is suppressed when exercises[] is present — the structured table
+  // renders below instead. Notes is the legacy free-text dump.
+  const hasExercises = Array.isArray(d?.exercises) && d.exercises.length > 0
+  if (s.notes && !hasExercises) out.push({ label: 'Notes', value: s.notes })
   if (s.matched_run) {
     const r = s.matched_run
     const km = r.distance_m / 1000
@@ -426,6 +442,7 @@ export function WeekStrip({
       dotClass: runDotClass(r.runType),
       status: 'completed',
       details: detailsForRun(r),
+      exercises: null,
       sessionId: null,
       isMissed: false,
       isFlex: false,
@@ -449,6 +466,10 @@ export function WeekStrip({
     const isMissed = status === 'planned' && ymd < todayYmd
     const isFlex = status === 'planned' && d?.flexible === true
     const shortLabel = MODALITY_SHORT[s.modality] ?? s.modality
+    const exercises =
+      Array.isArray(d?.exercises) && d.exercises.length > 0
+        ? (d.exercises as SessionExercise[])
+        : null
     cell.items.push({
       key: `session-${s.id}`,
       kind: 'session',
@@ -457,6 +478,7 @@ export function WeekStrip({
       dotClass: sessionDotClass(s.modality),
       status,
       details: detailsForSession(s),
+      exercises,
       sessionId: s.id,
       isMissed,
       isFlex,
@@ -594,6 +616,7 @@ export function WeekStrip({
                       {isOpen && it.details && (
                         <ItemPopover
                           details={it.details}
+                          exercises={it.exercises}
                           onClose={() => setOpenKey(null)}
                           editHref={
                             it.sessionId ? `/log/session/${it.sessionId}/edit` : undefined
@@ -652,22 +675,35 @@ interface PopoverActions {
   onSkip: () => void
 }
 
+function formatRestShort(seconds: number): string {
+  if (seconds < 60) return `${seconds}s`
+  const m = Math.floor(seconds / 60)
+  const s = seconds % 60
+  return s === 0 ? `${m}m` : `${m}:${String(s).padStart(2, '0')}`
+}
+
 function ItemPopover({
   details,
+  exercises,
   onClose,
   editHref,
   actions,
 }: {
   details: ItemDetail[]
+  exercises?: SessionExercise[] | null
   onClose: () => void
   editHref?: string
   actions?: PopoverActions
 }) {
+  // Widen the popover when a prescription table is shown so the columns
+  // don't crowd; the default 240px is fine for the dl alone.
+  const hasExercises = Array.isArray(exercises) && exercises.length > 0
+  const widthClass = hasExercises ? 'w-[320px]' : 'w-[240px]'
   return (
     <div
       data-popover="true"
       role="dialog"
-      className="absolute z-20 top-full left-0 mt-1 w-[240px] rounded border border-border bg-panel shadow-lg p-3 space-y-1.5 text-[11px]"
+      className={`absolute z-20 top-full left-0 mt-1 ${widthClass} rounded border border-border bg-panel shadow-lg p-3 space-y-1.5 text-[11px]`}
     >
       <div className="flex justify-between items-center -mt-1 -mr-1">
         {editHref ? (
@@ -699,6 +735,39 @@ function ItemPopover({
           </div>
         ))}
       </dl>
+      {hasExercises && (
+        <div className="pt-2 mt-2 border-t border-border">
+          <p className="text-muted uppercase tracking-[0.06em] text-[10px] mb-1">
+            Exercises
+          </p>
+          <table className="w-full text-[11px] font-mono -tracking-[0.01em]">
+            <thead>
+              <tr className="text-muted text-left text-[10px] uppercase tracking-[0.06em]">
+                <th className="font-normal pr-2 py-0.5">Move</th>
+                <th className="font-normal pr-2 py-0.5 text-right">S×R</th>
+                <th className="font-normal pr-2 py-0.5 text-right">Wt</th>
+                <th className="font-normal py-0.5 text-right">Rest</th>
+              </tr>
+            </thead>
+            <tbody>
+              {exercises!.map((ex, idx) => (
+                <tr key={idx} className="text-ink-2 align-top">
+                  <td className="pr-2 py-0.5 break-words">{ex.name}</td>
+                  <td className="pr-2 py-0.5 text-right whitespace-nowrap">
+                    {ex.sets}×{ex.reps}
+                  </td>
+                  <td className="pr-2 py-0.5 text-right whitespace-nowrap text-ink-2">
+                    {ex.weight ?? '—'}
+                  </td>
+                  <td className="py-0.5 text-right whitespace-nowrap text-muted">
+                    {ex.rest_s != null ? formatRestShort(ex.rest_s) : '—'}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
       {actions && (
         <div className="pt-2 mt-2 border-t border-border space-y-1">
           {actions.kind === 'missed' && (
