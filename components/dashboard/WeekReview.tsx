@@ -1,4 +1,4 @@
-import { formatPace, type RunType } from '@/lib/run/classify'
+import { formatPace, isQualityType, type RunType } from '@/lib/run/classify'
 import { avgEasyPaceMinPerKm, avgHr, pctChange, sumKm } from '@/lib/run/aggregate'
 
 export interface WeekReviewActivity {
@@ -129,6 +129,8 @@ function typeDotClass(type: RunType): string {
   return {
     easy: 'bg-type-easy',
     tempo: 'bg-type-tempo',
+    threshold: 'bg-type-threshold',
+    vo2: 'bg-type-vo2',
     long: 'bg-type-long',
     recovery: 'bg-type-recovery',
     race: 'bg-type-race',
@@ -160,11 +162,14 @@ export function WeekReview({
     (acc, a) => (acc && acc.distance_m > a.distance_m ? acc : a),
     null,
   )
-  const easyPace = avgEasyPaceMinPerKm(review)
+  // Exclude quality sessions (tempo/threshold/vo2/race) so a hard rep day
+  // doesn't pull the easy-pace average faster than it really is.
+  const easyRuns = review.filter(a => !isQualityType(a.runType))
+  const easyPace = avgEasyPaceMinPerKm(easyRuns)
   const easyHr = avgHr(review.filter(a => a.runType === 'easy'))
 
   const quality = review.filter(
-    a => a.runType === 'tempo' || a.runType === 'long',
+    a => isQualityType(a.runType) || a.runType === 'long',
   )
 
   const strengthSessions = sessions.filter(

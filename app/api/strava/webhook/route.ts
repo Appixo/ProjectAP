@@ -95,5 +95,5 @@ async function processEvent(
   const accessToken = await ensureFreshToken(admin, account)
   const activity = await fetchActivityById(accessToken, e.object_id)
   if (!activity) return
-  await upsertIfRun(admin, account.user_id, activity)
+  await upsertIfRun(admin, account.user_id, activity, accessToken)
 }

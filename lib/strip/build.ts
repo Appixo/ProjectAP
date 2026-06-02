@@ -8,7 +8,7 @@ import type {
   WeekStripSession,
   SessionDescription,
 } from '@/components/dashboard/WeekStrip'
-import type { RunType } from '@/lib/run/classify'
+import { asRunType, type RunType } from '@/lib/run/classify'
 
 export interface RawStripRun {
   id: number
@@ -16,6 +16,7 @@ export interface RawStripRun {
   distance_m: number
   moving_time_s: number
   average_speed_mps: number | null
+  run_type?: string | null
 }
 
 export interface RawStripSession {
@@ -41,9 +42,10 @@ export interface StripData {
  * Build WeekStrip props from raw query rows.
  *
  * `runTypeByActivityId` is optional — when omitted (e.g. the API endpoint
- * doesn't want to pay for a full classifier run on every nav), every run
- * falls back to 'easy'. The strip uses this only for the small coloured
- * dot, so the cosmetic cost of a wrong default is low.
+ * doesn't want to pay for a full classifier run on every nav), each run falls
+ * back to its persisted run_type column (set when a plan matched), then to
+ * 'easy'. The strip uses this only for the small coloured dot, so the cosmetic
+ * cost of a wrong default is low.
  */
 export function buildStripData(
   rawRuns: RawStripRun[],
@@ -57,6 +59,9 @@ export function buildStripData(
   )
   const runById = new Map(rawRuns.map(r => [r.id, r]))
 
+  const runTypeFor = (r: RawStripRun): RunType =>
+    runTypeByActivityId?.get(r.id) ?? asRunType(r.run_type) ?? 'easy'
+
   const runs: WeekStripRun[] = rawRuns
     .filter(r => !matchedActivityIds.has(r.id))
     .map(r => ({
@@ -64,7 +69,7 @@ export function buildStripData(
       start_at: r.start_at,
       distance_m: r.distance_m,
       moving_time_s: r.moving_time_s,
-      runType: runTypeByActivityId?.get(r.id) ?? 'easy',
+      runType: runTypeFor(r),
     }))
 
   const sessions: WeekStripSession[] = rawSessions
@@ -88,7 +93,7 @@ export function buildStripData(
               start_at: matched.start_at,
               distance_m: matched.distance_m,
               moving_time_s: matched.moving_time_s,
-              runType: runTypeByActivityId?.get(matched.id) ?? 'easy',
+              runType: runTypeFor(matched),
             }
           : null,
       }

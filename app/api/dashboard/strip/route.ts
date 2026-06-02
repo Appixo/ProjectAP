@@ -15,10 +15,10 @@ import {
 // in proxy.ts already gates access at the edge). The endpoint resolves the
 // owner via requireOwner() and scopes its queries by that user_id.
 //
-// Run classification is intentionally skipped here — see lib/strip/build.ts.
-// The strip's dot colour falls back to 'easy' for everything; users care
-// about the planned/actual badge and the popover content, not the dot hue,
-// when scrubbing weeks.
+// The heuristic classifier is intentionally skipped here — see lib/strip/build.ts.
+// Plan-matched runs carry a persisted run_type column, so those dots are still
+// accurate; unplanned runs fall back to 'easy'. Users care about the
+// planned/actual badge and popover content, not the dot hue, when scrubbing.
 
 export async function GET(request: NextRequest) {
   const { supabase, user } = await requireOwner()
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
     await Promise.all([
       supabase
         .from('activities')
-        .select('id, start_at, distance_m, moving_time_s, average_speed_mps')
+        .select('id, start_at, distance_m, moving_time_s, average_speed_mps, run_type')
         .eq('user_id', user.id)
         .eq('type', 'Run')
         .gte('start_at', startIso)

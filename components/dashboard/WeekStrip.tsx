@@ -74,6 +74,9 @@ interface DayItem {
   details: ItemDetail[] | null
   /** Structured prescription rows shown as a table in the popover. */
   exercises: SessionExercise[] | null
+  /** Free-text notes, rendered as a separate pre-wrap block below the table
+   *  so explicit newlines (warm-up, finisher, load cues) survive. */
+  notes: string | null
   /** Session id when kind='session'. Null for runs. Used for reschedule. */
   sessionId: string | null
   /** True when status='planned' and the day has already passed. */
@@ -121,6 +124,8 @@ function runDotClass(type: RunType): string {
   return {
     easy: 'bg-type-easy',
     tempo: 'bg-type-tempo',
+    threshold: 'bg-type-threshold',
+    vo2: 'bg-type-vo2',
     long: 'bg-type-long',
     recovery: 'bg-type-recovery',
     race: 'bg-type-race',
@@ -255,10 +260,9 @@ function detailsForSession(s: WeekStripSession): ItemDetail[] {
     out.push({ label: 'Flex', value: alt })
   }
   if (d?.reason) out.push({ label: 'Why', value: d.reason })
-  // Notes is suppressed when exercises[] is present — the structured table
-  // renders below instead. Notes is the legacy free-text dump.
-  const hasExercises = Array.isArray(d?.exercises) && d.exercises.length > 0
-  if (s.notes && !hasExercises) out.push({ label: 'Notes', value: s.notes })
+  // Notes is rendered separately at the bottom of the popover so its
+  // explicit newlines (warm-up, finisher, load cues) survive the labeled
+  // grid layout. See ItemPopover.
   if (s.matched_run) {
     const r = s.matched_run
     const km = r.distance_m / 1000
@@ -443,6 +447,7 @@ export function WeekStrip({
       status: 'completed',
       details: detailsForRun(r),
       exercises: null,
+      notes: null,
       sessionId: null,
       isMissed: false,
       isFlex: false,
@@ -479,6 +484,7 @@ export function WeekStrip({
       status,
       details: detailsForSession(s),
       exercises,
+      notes: s.notes ?? null,
       sessionId: s.id,
       isMissed,
       isFlex,
@@ -617,6 +623,7 @@ export function WeekStrip({
                         <ItemPopover
                           details={it.details}
                           exercises={it.exercises}
+                          notes={it.notes}
                           onClose={() => setOpenKey(null)}
                           editHref={
                             it.sessionId ? `/log/session/${it.sessionId}/edit` : undefined
@@ -685,12 +692,14 @@ function formatRestShort(seconds: number): string {
 function ItemPopover({
   details,
   exercises,
+  notes,
   onClose,
   editHref,
   actions,
 }: {
   details: ItemDetail[]
   exercises?: SessionExercise[] | null
+  notes?: string | null
   onClose: () => void
   editHref?: string
   actions?: PopoverActions
@@ -698,6 +707,7 @@ function ItemPopover({
   // Widen the popover when a prescription table is shown so the columns
   // don't crowd; the default 240px is fine for the dl alone.
   const hasExercises = Array.isArray(exercises) && exercises.length > 0
+  const hasNotes = typeof notes === 'string' && notes.length > 0
   const widthClass = hasExercises ? 'w-[320px]' : 'w-[240px]'
   return (
     <div
@@ -766,6 +776,14 @@ function ItemPopover({
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+      {hasNotes && (
+        <div className="pt-2 mt-2 border-t border-border">
+          <p className="text-muted uppercase tracking-[0.06em] text-[10px] mb-1">
+            Notes
+          </p>
+          <p className="text-ink-2 whitespace-pre-wrap break-words">{notes}</p>
         </div>
       )}
       {actions && (

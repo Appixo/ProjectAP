@@ -5,7 +5,7 @@
 // Inputs already exclude source='inferred' rows by convention; caller is
 // responsible for that filter (kept here so the function is reusable).
 
-import { classifyRuns, type RunInput } from './classify'
+import { classifyRuns, asRunType, isQualityType, type RunInput } from './classify'
 import { ymdInAmsterdam } from '@/lib/time/week'
 import { bestEfforts, type BestEfforts, type ManualPersonalBest } from './best_efforts'
 
@@ -46,6 +46,13 @@ export interface ActivityForDerived {
   max_heartrate: number | null
   average_speed_mps: number | null
   source?: string | null
+  // Plan-derived type (stamped when a planned run matched). Takes precedence
+  // over HR/pace when splitting easy vs hard.
+  run_type?: string | null
+  // Fraction (0-100) of moving time above the tempo HR floor (M2 signal).
+  hr_above_tempo_pct?: number | null
+  // Lap-structure interval flag (M3 signal).
+  interval_structure?: boolean | null
 }
 
 export interface DerivedMetrics {
@@ -177,74 +184,72 @@ export function deriveMetrics(
     if (chronic > 0) acwr = Number((km7 / chronic).toFixed(2))
   }
 
-  // Easy/hard split over the last 28d, weighted by moving_time_s.
-  // Prefer HR when at least 5 of the 28d runs carry HR + we can derive a
-  // personal max. Threshold = 75% of personal max ~ top of zone 2.
+  // Easy/hard split over the last 28d, weighted by moving_time_s. Precedence
+  // per run: (1) plan-matched run_type, (2) HR vs threshold when we have a
+  // usable HR window, (3) the pace heuristic (which itself folds in the HR
+  // time-in-zone + lap-structure signals). Threshold = 80% of personal max
+  // (~top of zone 2). The plan type wins first so a logged threshold session
+  // counts as hard even if its average HR sits under the zone-2 ceiling.
   let split: DerivedMetrics['easy_hard_split_28d_pct'] = null
   if (runs28d.length > 0) {
     const hrRuns = runs28d.filter(
       r => r.has_heartrate && typeof r.average_heartrate === 'number',
     )
     const useHr = hrRuns.length >= 5
-    let easyS = 0
-    let hardS = 0
+
+    // Personal-max estimate from the 95th percentile of plausible
+    // max_heartrate readings across all runs. The 100/215 bounds drop sensor
+    // spikes and post-pause zeros at the value level; the p95 (vs raw max)
+    // drops one-off outliers.
+    let personalMax = 0
+    let threshold = 0
     if (useHr) {
-      // Personal-max estimate from the 95th percentile of plausible
-      // max_heartrate readings across all runs. The 100/215 bounds drop
-      // sensor spikes and post-pause zeros at the value level; the p95
-      // (vs raw max) drops one-off outliers. Earlier code also filtered
-      // by date to exclude pre-arm-band wrist data, but that produced
-      // an under-estimate when the recent window happened to contain no
-      // max-effort runs — sample-quality bounds are enough.
       const cleanMaxHr = runs
         .map(r => r.max_heartrate ?? 0)
         .filter(v => v >= MAX_HR_FLOOR && v <= MAX_HR_CEILING)
         .sort((a, b) => a - b)
-      const personalMax = percentile95(cleanMaxHr) ?? DEFAULT_PERSONAL_MAX_HR
-      const threshold = personalMax * EASY_HARD_THRESHOLD_FRACTION
-      for (const r of runs28d) {
-        const time = r.moving_time_s ?? 0
-        if (
-          r.has_heartrate &&
-          typeof r.average_heartrate === 'number' &&
-          r.average_heartrate > 0
-        ) {
-          if (r.average_heartrate <= threshold) easyS += time
-          else hardS += time
-        } else {
-          // No HR on this row — treat as easy. We're already in the HR
-          // branch because >=5 other rows do have HR, so partial coverage
-          // is the common case.
-          easyS += time
-        }
+      personalMax = percentile95(cleanMaxHr) ?? DEFAULT_PERSONAL_MAX_HR
+      threshold = personalMax * EASY_HARD_THRESHOLD_FRACTION
+    }
+
+    // Heuristic fallback for runs with no plan type and (in the HR window) no
+    // usable average HR on the row itself.
+    const classes = classifyRuns(runs28d.map(toRunInput))
+
+    let easyS = 0
+    let hardS = 0
+    for (const r of runs28d) {
+      const time = r.moving_time_s ?? 0
+      const planned = asRunType(r.run_type ?? null)
+      let hard: boolean
+      if (planned) {
+        hard = isQualityType(planned)
+      } else if (
+        useHr &&
+        r.has_heartrate &&
+        typeof r.average_heartrate === 'number' &&
+        r.average_heartrate > 0
+      ) {
+        hard = r.average_heartrate > threshold
+      } else {
+        hard = isQualityType(classes.get(makeKey(r)) ?? 'easy')
       }
-      const total = easyS + hardS
-      if (total > 0) {
-        split = {
-          easy: Number(((easyS / total) * 100).toFixed(1)),
-          hard: Number(((hardS / total) * 100).toFixed(1)),
-          basis: 'hr',
-          personal_max_bpm: Math.round(personalMax),
-          threshold_bpm: Math.round(threshold),
-        }
-      }
-    } else {
-      // Pace-based via heuristic classifier.
-      const classes = classifyRuns(runs28d.map(toRunInput))
-      for (const r of runs28d) {
-        const key = makeKey(r)
-        const type = classes.get(key)
-        const time = r.moving_time_s ?? 0
-        if (type === 'tempo' || type === 'race') hardS += time
-        else easyS += time
-      }
-      const total = easyS + hardS
-      if (total > 0) {
-        split = {
-          easy: Number(((easyS / total) * 100).toFixed(1)),
-          hard: Number(((hardS / total) * 100).toFixed(1)),
-          basis: 'pace',
-        }
+      if (hard) hardS += time
+      else easyS += time
+    }
+
+    const total = easyS + hardS
+    if (total > 0) {
+      split = {
+        easy: Number(((easyS / total) * 100).toFixed(1)),
+        hard: Number(((hardS / total) * 100).toFixed(1)),
+        basis: useHr ? 'hr' : 'pace',
+        ...(useHr
+          ? {
+              personal_max_bpm: Math.round(personalMax),
+              threshold_bpm: Math.round(threshold),
+            }
+          : {}),
       }
     }
   }
@@ -337,5 +342,8 @@ function toRunInput(a: ActivityForDerived): RunInput {
     start_at: a.start_at,
     distance_m: a.distance_m,
     average_speed_mps: a.average_speed_mps,
+    hr_above_tempo_frac:
+      a.hr_above_tempo_pct != null ? a.hr_above_tempo_pct / 100 : null,
+    interval_structure: a.interval_structure,
   }
 }

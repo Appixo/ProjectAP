@@ -18,6 +18,7 @@ import {
 import { PersonalBests } from '@/components/dashboard/PersonalBests'
 import { bestEfforts, type ManualPersonalBest } from '@/lib/run/best_efforts'
 import { RunsTable, type RunRow } from '@/components/dashboard/RunsTable'
+import type { CompactLap } from '@/lib/run/laps'
 import { Footnote } from '@/components/dashboard/Footnote'
 import { WeeklyMileage, WeeklyMileageLegend, type WeekDatum } from '@/components/charts/WeeklyMileage'
 import { LongestRun, type LongestDatum } from '@/components/charts/LongestRun'
@@ -32,7 +33,7 @@ import {
 import { YearHeatmap } from '@/components/dashboard/YearHeatmap'
 import { TodayLine, type TodayLineSession, type TodayLineWellness } from '@/components/dashboard/TodayLine'
 import { buildHeatmapDays, type HeatmapActivity, type HeatmapSession } from '@/lib/heatmap/build'
-import { classifyRuns, formatPace } from '@/lib/run/classify'
+import { classifyRuns, formatPace, asRunType, isQualityType } from '@/lib/run/classify'
 import { pctChange, sumKm, weeklyBuckets } from '@/lib/run/aggregate'
 import { planContext } from '@/lib/time/race'
 import {
@@ -65,6 +66,15 @@ interface RawActivity {
   moving_time_s: number
   average_heartrate: number | null
   average_speed_mps: number | null
+  // Plan-derived type, stamped when a planned run_* session matched this
+  // activity. Preferred over the heuristic classifier when present.
+  run_type: string | null
+  // Fraction (0-100) of moving time above the tempo HR floor (M2 signal).
+  hr_above_tempo_pct: number | null
+  // True when lap structure looks like an interval/threshold session (M3).
+  interval_structure: boolean | null
+  // Compact per-lap splits (M3), shown in the weekly runs table.
+  laps: CompactLap[] | null
 }
 
 interface RawDailyLog {
@@ -182,7 +192,8 @@ export default async function DashboardPage({
     supabase
       .from('activities')
       .select(
-        'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps',
+        'id, start_at, distance_m, moving_time_s, average_heartrate, average_speed_mps, ' +
+          'run_type, hr_above_tempo_pct, interval_structure, laps',
       )
       .eq('user_id', user.id)
       .eq('type', 'Run')
@@ -356,18 +367,26 @@ export default async function DashboardPage({
   ])
 
   const activities = rawActivities ?? []
+  // Heuristic classification for runs with no plan match. Fed the HR-stream
+  // fraction and lap-structure flag so an unplanned interval/threshold run
+  // isn't read as easy off its (recovery-dragged) average pace.
   const types = classifyRuns(
     activities.map(a => ({
       id: a.id,
       start_at: a.start_at,
       distance_m: a.distance_m,
       average_speed_mps: a.average_speed_mps,
+      hr_above_tempo_frac:
+        a.hr_above_tempo_pct != null ? a.hr_above_tempo_pct / 100 : null,
+      interval_structure: a.interval_structure,
     })),
   )
 
+  // Plan-matched type (run_type column) is the source of truth; fall back to
+  // the heuristic, then to easy.
   const enriched = activities.map(a => ({
     ...a,
-    runType: types.get(a.id) ?? 'easy',
+    runType: asRunType(a.run_type) ?? types.get(a.id) ?? 'easy',
   }))
 
   const thisWeekRuns = enriched.filter(
@@ -411,8 +430,8 @@ export default async function DashboardPage({
       intensityByWeek.set(wk, { easyKm: 0, thresholdPlusKm: 0 })
     }
     const bucket = intensityByWeek.get(wk)!
-    const t = types.get(a.id) ?? 'easy'
-    if (t === 'tempo' || t === 'long' || t === 'race') {
+    const t = asRunType(a.run_type) ?? types.get(a.id) ?? 'easy'
+    if (isQualityType(t) || t === 'long') {
       bucket.thresholdPlusKm += a.distance_m / 1000
     } else {
       bucket.easyKm += a.distance_m / 1000
@@ -580,6 +599,7 @@ export default async function DashboardPage({
       average_heartrate: r.average_heartrate,
       average_speed_mps: r.average_speed_mps,
       runType: r.runType,
+      laps: r.laps,
     }))
 
   const reviewActivities: WeekReviewActivity[] = lastWeekRuns.map(r => ({

@@ -29,6 +29,8 @@
      faint = below baseline / cutback */
   --color-type-easy:     oklch(0.80 0.006 85);
   --color-type-tempo:    oklch(0.74 0.13 55);
+  --color-type-threshold:oklch(0.71 0.15 40);
+  --color-type-vo2:      oklch(0.66 0.16 330);
   --color-type-long:     oklch(0.72 0.10 230);
   --color-type-recovery: oklch(0.72 0.10 145);
   --color-type-race:     oklch(0.68 0.16 25);
@@ -60,6 +62,8 @@
 
   --color-type-easy:     oklch(0.22 0.01 85);
   --color-type-tempo:    oklch(0.62 0.13 55);
+  --color-type-threshold:oklch(0.58 0.15 40);
+  --color-type-vo2:      oklch(0.52 0.16 330);
   --color-type-long:     oklch(0.45 0.08 230);
   --color-type-recovery: oklch(0.55 0.09 145);
   --color-type-race:     oklch(0.55 0.16 25);

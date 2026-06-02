@@ -45,6 +45,9 @@ interface ActivityRow extends ActivityForDerived {
   shoe_id: string | null
   surface: string | null
   run_type: string | null
+  hr_above_tempo_pct: number | null
+  interval_structure: boolean | null
+  laps: unknown
 }
 
 function daysBetween(fromYmd: string, toYmd: string | null): number | null {
@@ -92,6 +95,31 @@ const SCHEMA = {
       type: 'enum',
       values: ['easy', 'long', 'tempo', 'threshold', 'vo2', 'race', 'recovery'],
       optional: true,
+      note: "Authoritative workout type. Set when a planned training_sessions run_* row matches this activity (inherits the plan's type). The source of truth for classification — prefer it over re-deriving from HR/pace. Null on unplanned runs (the dashboard then falls back to a pace + HR-time-in-zone + lap-structure heuristic).",
+    },
+    hr_above_tempo_pct: {
+      type: 'number',
+      unit: 'percent',
+      optional: true,
+      note: 'Fraction (0-100) of moving time at/above the tempo HR floor (~155 bpm), from the HR stream at ingest. The signal that separates an interval/threshold session from an easy run: the average HR is dragged down by warm-up + jog recoveries, but the time-in-zone is not. >15% above the floor ⇒ not easy.',
+    },
+    interval_structure: {
+      type: 'boolean',
+      optional: true,
+      note: 'True when lap-to-lap variance looks like an interval/threshold session (distinct fast work laps separated by slower recoveries, HR-corroborated). The definitive structural signature of quality work; a flat easy run has none.',
+    },
+    laps: {
+      type: 'array',
+      shape: {
+        n: 'integer — lap/split index',
+        distance_m: 'number (meters)',
+        moving_time_s: 'integer (seconds)',
+        average_speed_mps: 'number (m/s) | null',
+        average_heartrate: 'number (bpm) | null',
+        max_heartrate: 'number (bpm) | null',
+      },
+      optional: true,
+      note: 'Compact per-lap splits parsed from the Strava activity detail (laps preferred over splits_standard). Null when no detail was ingested or the run was a single whole-run lap.',
     },
     source: {
       type: 'enum',
@@ -276,7 +304,7 @@ const SCHEMA = {
       shape: {
         easy: 'number (pct of moving_time_s, last 28d)',
         hard: 'number (pct of moving_time_s, last 28d)',
-        basis: 'enum: hr (>=5 runs with HR, threshold = 80% of personal_max_bpm) | pace (heuristic classifier)',
+        basis: 'enum: hr (>=5 runs with HR, threshold = 80% of personal_max_bpm) | pace (heuristic classifier). Note: regardless of basis, a run with a plan-matched run_type is classified by that type (quality types = tempo/threshold/vo2/race count as hard), taking precedence over its average HR or pace.',
         personal_max_bpm:
           'integer, only when basis=hr — 95th percentile of plausible max_heartrate readings across all runs. Values <100 or >215 bpm dropped as artefacts at the sample level; the 95th percentile (vs raw max) makes the estimate robust to one-off sensor spikes without needing a date filter.',
         threshold_bpm:
@@ -349,7 +377,8 @@ export async function GET(request: NextRequest) {
         'id, start_at, start_at_local, timezone, name, type, distance_m, ' +
           'moving_time_s, elapsed_time_s, total_elevation_gain_m, ' +
           'average_heartrate, max_heartrate, average_speed_mps, max_speed_mps, ' +
-          'has_heartrate, rpe_1_10, weather, shoe_id, surface, run_type, source',
+          'has_heartrate, rpe_1_10, weather, shoe_id, surface, run_type, ' +
+          'hr_above_tempo_pct, interval_structure, laps, source',
       )
       .eq('user_id', auth.userId)
       .order('start_at', { ascending: false })
@@ -478,6 +507,9 @@ export async function GET(request: NextRequest) {
       max_heartrate: a.max_heartrate,
       average_speed_mps: a.average_speed_mps,
       source: a.source,
+      run_type: a.run_type,
+      hr_above_tempo_pct: a.hr_above_tempo_pct,
+      interval_structure: a.interval_structure,
     })),
     now,
     goalsRow?.primary_event_date ?? null,

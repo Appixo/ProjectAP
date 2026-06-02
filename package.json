@@ -8,7 +8,9 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
-    "backfill": "tsx scripts/strava-backfill.ts"
+    "backfill": "tsx scripts/strava-backfill.ts",
+    "enrich": "tsx scripts/strava-enrich.ts",
+    "verify:classifier": "tsx scripts/verify-classifier.ts"
   },
   "dependencies": {
     "@supabase/ssr": "^0.10.3",

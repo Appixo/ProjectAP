@@ -4,6 +4,8 @@ import {
   transformActivity,
   type StravaSummaryActivity,
 } from './transform'
+import { fetchActivityStreams, hrAboveTempoPct } from './streams'
+import { modalityToRunType } from '../run/classify'
 
 export interface StravaAccountRow {
   user_id: string
@@ -69,9 +71,23 @@ export async function upsertIfRun(
   supabase: SupabaseClient,
   userId: string,
   activity: StravaSummaryActivity,
+  accessToken?: string,
 ): Promise<boolean> {
   if (activity.type !== 'Run') return false
   const row = transformActivity(activity, userId)
+
+  // HR-distribution signal: one extra streams call to compute the fraction of
+  // moving time above the tempo floor. Best-effort — a stream failure must not
+  // block the activity upsert, so we just leave hr_above_tempo_pct null.
+  if (accessToken && activity.has_heartrate) {
+    try {
+      const streams = await fetchActivityStreams(accessToken, activity.id)
+      row.hr_above_tempo_pct = hrAboveTempoPct(streams)
+    } catch {
+      // ignore — classifier falls back to pace/plan signals.
+    }
+  }
+
   const { error } = await supabase
     .from('activities')
     .upsert(row, { onConflict: 'id' })
@@ -119,7 +135,21 @@ export async function matchPlannedRun(
       updated_at: new Date().toISOString(),
     })
     .eq('id', target.id)
-  return !updErr
+  if (updErr) return false
+
+  // Stamp the planned type onto the activity so the dashboard and the export
+  // endpoint read one authoritative run_type instead of re-deriving it from
+  // HR/pace (which is what tagged a threshold session "easy" in the first
+  // place). Best-effort: the match itself already succeeded.
+  const runType = modalityToRunType(target.modality)
+  if (runType) {
+    await supabase
+      .from('activities')
+      .update({ run_type: runType })
+      .eq('id', activityId)
+      .eq('user_id', userId)
+  }
+  return true
 }
 
 export async function deleteActivityById(

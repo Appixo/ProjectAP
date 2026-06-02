@@ -1,3 +1,9 @@
+import {
+  parseLaps,
+  detectIntervalStructure,
+  type CompactLap,
+} from '../run/laps'
+
 export interface StravaSummaryActivity {
   id: number
   athlete: { id: number }
@@ -16,6 +22,10 @@ export interface StravaSummaryActivity {
   start_date: string
   start_date_local: string
   timezone: string
+  // Present only on the activity *detail* response (fetchActivityById), not on
+  // the summary list. Parsed into compact splits + an interval-structure flag.
+  laps?: unknown
+  splits_standard?: unknown
 }
 
 export interface ActivityRow {
@@ -36,6 +46,11 @@ export interface ActivityRow {
   average_speed_mps: number
   max_speed_mps: number
   has_heartrate: boolean
+  laps: CompactLap[] | null
+  interval_structure: boolean | null
+  // Set by upsertIfRun from the HR stream (separate API call), not by the
+  // pure transform. Omitted on the summary-list path (resync / backfill).
+  hr_above_tempo_pct?: number | null
   raw: unknown
   updated_at: string
 }
@@ -57,6 +72,9 @@ export function transformActivity(
   a: StravaSummaryActivity,
   userId: string,
 ): ActivityRow {
+  // laps/splits exist only on the detail payload. parseLaps returns null for
+  // summary rows (resync / backfill) and for runs with a single whole-run lap.
+  const laps = parseLaps(a)
   return {
     id: a.id,
     user_id: userId,
@@ -77,6 +95,8 @@ export function transformActivity(
     average_speed_mps: a.average_speed,
     max_speed_mps: a.max_speed,
     has_heartrate: a.has_heartrate ?? false,
+    laps,
+    interval_structure: laps ? detectIntervalStructure(laps) : null,
     raw: a,
     updated_at: new Date().toISOString(),
   }
